@@ -1,0 +1,11 @@
+services:
+  powershell-toolkit:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - PS_TOOLKIT_ADMIN_PASSWORD_HASH=${PS_TOOLKIT_ADMIN_PASSWORD_HASH}
+    volumes:
+      - ./database:/app/database
+      - ./backups:/app/backups
+    restart: unless-stopped

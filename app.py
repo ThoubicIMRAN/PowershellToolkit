@@ -4,7 +4,11 @@ from datetime import date
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-from services import auth,repository as repo
+import services.auth as auth
+import services.repository as repo
+
+# Ensure database structure is ready before rendering or checking state
+repo.init_db()
 
 st.set_page_config(page_title='PowerShell Master Toolkit',page_icon='⚡',layout='wide',initial_sidebar_state='expanded')
 st.markdown(f'<style>{(Path(__file__).parent/"assets/theme.css").read_text(encoding="utf-8")}</style>',unsafe_allow_html=True)
@@ -64,42 +68,103 @@ with st.sidebar:
 if st.session_state.get('pending_edit'):
     command_id=st.session_state.pop('pending_edit'); edit_dialog(command_id)
 
-if st.session_state.route=='Administration':
+if st.session_state.route == 'Administration':
     st.title('Administration')
+    
+    # 1. Enforce Authentication Gate
     if not auth.is_admin():
         st.info('Administrator authentication is required to add, edit or import commands.')
-        if not auth.configured(): st.error('Admin authentication is not configured. Set auth.admin_password_hash in .streamlit/secrets.toml or PS_TOOLKIT_ADMIN_PASSWORD_HASH.')
+        if not auth.configured(): 
+            st.error('Admin authentication is not configured. Set auth.admin_password_hash in .streamlit/secrets.toml or PS_TOOLKIT_ADMIN_PASSWORD_HASH.')
+        
         with st.form('admin_login'):
-            password=st.text_input('Administrator password',type='password')
-            if st.form_submit_button('Sign In',type='primary',use_container_width=True):
-                if auth.login(password): st.success('Access granted.'); st.rerun()
-                else: st.error('Invalid administrator credentials.')
-        if st.button('← Return to Library'): st.session_state.route='Library'; st.rerun()
+            password = st.text_input('Administrator password', type='password')
+            # FIX: Updated use_container_width to width='stretch'
+            if st.form_submit_button('Sign In', type='primary', width='stretch'):
+                if auth.login(password): 
+                    st.success('Access granted.')
+                    st.rerun()
+                else: 
+                    st.error('Invalid administrator credentials.')
+        
+        if st.button('← Return to Library'): 
+            st.session_state.route = 'Library'
+            st.rerun()
         st.stop()
-    h=repo.health(); metrics=st.columns(4)
-    for col,(label,value) in zip(metrics,[('Commands',h['commands']),('Categories',h['categories']),('Integrity',h['integrity']),('Schema',h['schema_version'])]): col.metric(label,value)
-    manage,transfer,audit=st.tabs(['Command Management','Import / Export','Audit & Health'])
+    
+    # 2. Safely Fetch Database Data (Make sure repo.init_db() has been run at the top of app.py)
+    try:
+        h = repo.health()
+    except Exception as e:
+        st.error(f"Database error during health check: {e}. Ensure database tables have been initialized.")
+        if st.button('← Return to Command Library'): 
+            st.session_state.route = 'Library'
+            st.rerun()
+        st.stop()
+        
+    metrics = st.columns(4)
+    for col, (label, value) in zip(metrics, [('Commands', h['commands']), ('Categories', h['categories']), ('Integrity', h['integrity']), ('Schema', h['schema_version'])]): 
+        col.metric(label, value)
+        
+    manage, transfer, audit = st.tabs(['Command Management', 'Import / Export', 'Audit & Health'])
+    
+    # 3. Command Management Tab
     with manage:
         st.caption('Administrators can add and edit commands. Command deletion is intentionally disabled.')
-        if st.button('＋ Add New Command',type='primary'): add_dialog()
-        search=st.text_input('Find command to edit',placeholder='Search by title or command')
-        rows,total=repo.list_commands(search=search,page_size=20)
+        if st.button('＋ Add New Command', type='primary'): 
+            add_dialog()
+            
+        search = st.text_input('Find command to edit', placeholder='Search by title or command')
+        rows, total = repo.list_commands(search=search, page_size=20)
+        
         for command in rows:
-            a,b=st.columns([5,1]); a.write(f"**{command['title']}** · {command['category']}");
-            if b.button('Edit',key=f"admin_edit_{command['id']}",use_container_width=True): edit_dialog(command['id'])
+            a, b = st.columns([5, 1])
+            a.write(f"**{command['title']}** · {command['category']}")
+            # FIX: Updated use_container_width to width='stretch'
+            if b.button('Edit', key=f"admin_edit_{command['id']}", width='stretch'): 
+                edit_dialog(command['id'])
+                
+    # 4. Import / Export Tab
     with transfer:
-        uploaded=st.file_uploader('Import JSON',type=['json'])
-        if uploaded and st.button('Import Commands',type='primary'):
-            try: added,skipped=repo.import_json(uploaded.getvalue()); st.success(f'Imported {added}; skipped {skipped}.'); st.rerun()
-            except Exception as error: st.error(str(error))
-        st.download_button('Export Current Commands',repo.export_json(),f'ps_toolkit_{date.today()}.json','application/json')
+        uploaded = st.file_uploader('Import JSON', type=['json'])
+        if uploaded and st.button('Import Commands', type='primary'):
+            try: 
+                added, skipped = repo.import_json(uploaded.getvalue())
+                st.success(f'Imported {added}; skipped {skipped}.')
+                st.rerun()
+            except Exception as error: 
+                st.error(str(error))
+                
+        # FIX: Added defensive check in case datetime wasn't explicitly imported
+        try:
+            from datetime import date
+            current_date = date.today()
+        except ImportError:
+            current_date = "export"
+            
+        st.download_button('Export Current Commands', repo.export_json(), f'ps_toolkit_{current_date}.json', 'application/json')
+        
+    # 5. Audit & Health Tab
     with audit:
-        if h['integrity']=='ok' and h['foreign_key_errors']==0: st.success('Database integrity and foreign-key checks passed.')
-        else: st.error(f"Integrity: {h['integrity']}; foreign-key issues: {h['foreign_key_errors']}")
-        st.dataframe(pd.DataFrame(repo.audit_logs()),use_container_width=True,hide_index=True)
-    if st.button('← Return to Command Library'): st.session_state.route='Library'; st.rerun()
+        if h['integrity'] == 'ok' and h['foreign_key_errors'] == 0: 
+            st.success('Database integrity and foreign-key checks passed.')
+        else: 
+            st.error(f"Integrity: {h['integrity']}; foreign-key issues: {h['foreign_key_errors']}")
+            
+        # FIX: Added defensive check in case pandas wasn't imported, and fixed width='stretch'
+        try:
+            import pandas as pd
+            logs_df = pd.DataFrame(repo.audit_logs())
+            st.dataframe(logs_df, width='stretch', hide_index=True)
+        except ImportError:
+            st.error("Pandas module missing. Could not render visual logs table.")
+            st.write(repo.audit_logs())
+            
+    if st.button('← Return to Command Library'): 
+        st.session_state.route = 'Library'
+        st.rerun()
     st.stop()
-
+    
 search_col,risk_col,usage_col,size_col,reset_col=st.columns([4,1.45,1.45,1,1.25])
 search=search_col.text_input('Search',placeholder='Search commands, titles, purpose, category...',key='search',label_visibility='collapsed')
 risk_choice=risk_col.selectbox('Risk',['All Risks',*repo.RISK_LEVELS],key='risk',label_visibility='collapsed')

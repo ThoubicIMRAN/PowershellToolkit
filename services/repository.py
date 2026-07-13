@@ -157,8 +157,40 @@ def import_json(payload: bytes, actor='admin'):
         raise ValueError('JSON must contain an array.')
         
     added = skipped = 0
+    
+    # 1. Network Request 1: Fetch all categories at once to map in memory
     cat_res = db.table("categories").select("id, name").execute()
     cmap = {r['name'].casefold(): r['id'] for r in cat_res.data}
+    
+    max_cat = db.table("categories").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+    next_cat_order = (max_cat.data[0]['sort_order'] if max_cat.data else 0) + 1
+
+    # 2. Network Request 2: Fetch active commands for fast in-memory duplicate checks
+    exist_res = db.table("commands").select("title, command_text").eq("is_active", 1).execute()
+    existing_set = {(r['title'].casefold(), r['command_text']) for r in exist_res.data}
+    
+    max_cmd = db.table("commands").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+    cmd_order = (max_cmd.data[0]['sort_order'] if max_cmd.data else 0) + 1
+
+    # Phase A: Handle new categories in a single batch
+    new_categories_to_create = {}
+    for item in data:
+        category = str(item.get('category', 'Uncategorized')).strip() or 'Uncategorized'
+        key = category.casefold()
+        if key not in cmap and key not in new_categories_to_create:
+            new_categories_to_create[key] = {
+                'name': category,
+                'sort_order': next_cat_order
+            }
+            next_cat_order += 1
+            
+    if new_categories_to_create:
+        created_cats = db.table("categories").insert(list(new_categories_to_create.values())).execute()
+        for c in created_cats.data:
+            cmap[c['name'].casefold()] = c['id']
+
+    # Phase B: Process and validate commands locally in memory
+    commands_to_insert = []
     
     for item in data:
         try:
@@ -171,36 +203,48 @@ def import_json(payload: bytes, actor='admin'):
             if not title or not text or risk not in RISK_LEVELS or usage not in USAGE_TYPES: 
                 raise ValueError
                 
-            key = category.casefold()
-            if key not in cmap:
-                max_cat = db.table("categories").select("sort_order").order("sort_order", desc=True).limit(1).execute()
-                next_order = (max_cat.data[0]['sort_order'] if max_cat.data else 0) + 1
-                new_cat = db.table("categories").insert({'name': category, 'sort_order': next_order}).execute()
-                cmap[key] = new_cat.data[0]['id']
-                
-            dup_check = db.table("commands").select("id").eq("title", title).eq("command_text", text).eq("is_active", 1).execute()
-            if dup_check.data:
+            # Instant local duplicate check (No network lag)
+            if (title.casefold(), text) in existing_set:
                 skipped += 1
                 continue
                 
-            max_cmd = db.table("commands").select("sort_order").order("sort_order", desc=True).limit(1).execute()
-            cmd_order = (max_cmd.data[0]['sort_order'] if max_cmd.data else 0) + 1
+            commands_to_insert.append({
+                'category_id': cmap[category.casefold()],
+                'title': title,
+                'command_text': text,
+                'purpose': str(item.get('purpose', '')),
+                'expected_result': str(item.get('result', '')),
+                'risk_level': risk,
+                'usage_type': usage,
+                'notes': str(item.get('notes', '')),
+                'sort_order': cmd_order
+            })
             
-            new_cmd = db.table("commands").insert({
-                'category_id': cmap[key], 'title': title, 'command_text': text,
-                'purpose': str(item.get('purpose', '')), 'expected_result': str(item.get('result', '')),
-                'risk_level': risk, 'usage_type': usage, 'notes': str(item.get('notes', '')), 'sort_order': cmd_order
-            }).execute()
-            
-            db.table("audit_logs").insert({
-                'action': 'IMPORT', 'entity_type': 'command', 'entity_id': new_cmd.data[0]['id'], 'actor': actor, 'details': title
-            }).execute()
+            # Add to local cache set to catch duplicates within the same file import
+            existing_set.add((title.casefold(), text))
+            cmd_order += 1
             added += 1
         except Exception:
             skipped += 1
+
+    # Phase C: Final Network Request 3: Bulk Insert Everything
+    if commands_to_insert:
+        # Push all records down to Supabase in a single payload layout
+        inserted_cmds = db.table("commands").insert(commands_to_insert).execute()
+        
+        # Build and push audit logs in bulk using the returned record IDs
+        audit_logs_to_insert = [{
+            'action': 'IMPORT',
+            'entity_type': 'command',
+            'entity_id': cmd_row['id'],
+            'actor': actor,
+            'details': cmd_row['title']
+        } for cmd_row in inserted_cmds.data]
+        
+        if audit_logs_to_insert:
+            db.table("audit_logs").insert(audit_logs_to_insert).execute()
             
     return added, skipped
-
 def export_json() -> bytes:
     res = db.table("commands").select("id, title, command_text, purpose, expected_result, risk_level, usage_type, notes, categories(name)").eq("is_active", 1).order("id").execute()
     rows = []

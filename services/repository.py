@@ -261,7 +261,7 @@ def export_json() -> bytes:
             'notes': r['notes']
         })
     return json.dumps(rows, ensure_ascii=False, indent=2).encode()
-    def save_category(data: dict[str, Any], actor='admin', category_id: int | None = None) -> int:
+def save_category(data: dict[str, Any], actor='admin', category_id: int | None = None) -> int:
     """Creates or updates a category entity in the cloud database."""
     name = str(data.get('name', '')).strip()
     if not name:
@@ -280,7 +280,6 @@ def export_json() -> bytes:
         action = 'UPDATE'
         entity = category_id
     else:
-        # Calculate the next sort order position automatically
         max_res = db.table("categories").select("sort_order").order("sort_order", desc=True).limit(1).execute()
         max_order = max_res.data[0]['sort_order'] if max_res.data else 0
         payload['sort_order'] = (max_order or 0) + 1
@@ -289,7 +288,6 @@ def export_json() -> bytes:
         action = 'CREATE'
         entity = res.data[0]['id']
         
-    # Write to audit history log
     db.table("audit_logs").insert({
         'action': action,
         'entity_type': 'category',
@@ -299,7 +297,6 @@ def export_json() -> bytes:
     }).execute()
     
     return int(entity)
-
 def audit_logs(limit=500):
     res = db.table("audit_logs").select("*").order("id", desc=True).limit(limit).execute()
     return [dict(r) for r in res.data]

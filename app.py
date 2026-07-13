@@ -283,26 +283,7 @@ if c.button('Next →', disabled=st.session_state.page >= pages, width='stretch'
     st.session_state.page += 1
     st.rerun()
     
-if not rows:
-    st.info('No commands match your filters.')
-else:
-    grouped = {}
-    for command in rows: 
-        grouped.setdefault(command['category'], []).append(command)
-    for category, items in grouped.items():
-        meta = items[0]
-        # STRINGS FIX: Fallback to folder icon if category metadata emoji field is missing
-        icon = meta.get('icon') or "📁"
-        color = meta.get('color') or "#777777"
-        st.markdown(f'<div class="category-title" style="color:{color}">{icon} {category} · {len(items)} shown</div>', unsafe_allow_html=True)
-        for command in items:
-            with st.expander(f"{command['category_sequence']:02d} · {command['title']} | {command['risk_level']} · {command['usage_type']}"):
-                st.caption(command['purpose'] or 'No purpose specified')
-                st.code(command['command_text'], language='powershell')
-                x, y = st.columns(2)
-                x.caption(f"Expected: {command['expected_result'] or '—'}")
-                y.caption(f"Notes: {command['notes'] or '—'}")
-                
+
 if not rows:
     st.info('No commands match your filters.')
 else:

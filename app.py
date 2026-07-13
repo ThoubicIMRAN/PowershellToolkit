@@ -316,21 +316,24 @@ else:
         color = meta.get('color') or "#777777"
         st.markdown(f'<div class="category-title" style="color:{color}">{icon} {category} · {len(items)} shown</div>', unsafe_allow_html=True)
         
-for idx, command in enumerate(items, start=1):
-    with st.expander(f"{idx:02d} · {command['title']} | {command['risk_level']} · {command['usage_type']}"):
-        st.caption(command['purpose'] or 'No purpose specified')
-        st.code(command['command_text'], language='powershell')
-        x, y = st.columns(2)
-        x.caption(f"Expected: {command['expected_result'] or '—'}")
-        y.caption(f"Notes: {command['notes'] or '—'}")
-        
-        if auth.is_admin():
-            x, y = st.columns(2)
-            # FIX: Appended _{idx} to ensure the key is globally unique on the webpage
-            if x.button('👁 View', key=f"view_{command['id']}_{idx}", width='stretch'): 
-                preview_dialog(command['id'])
-            if y.button('✏️ Edit', key=f"edit_{command['id']}_{idx}", width='stretch'): 
-                edit_dialog(command['id'])
-        # FIX: Appended _{idx} here as well to fix line 344
-        elif st.button('👁 View Details', key=f"view_{command['id']}_{idx}", width='stretch'): 
-            preview_dialog(command['id'])
+        # FIX: Swapped back to iterating commands directly without local counters
+        for command in items:
+            # Pull the persistent, database-wide structural counter
+            seq = int(command.get('category_sequence', 1))
+            
+            with st.expander(f"{seq:02d} · {command['title']} | {command['risk_level']} · {command['usage_type']}"):
+                st.caption(command['purpose'] or 'No purpose specified')
+                st.code(command['command_text'], language='powershell')
+                x, y = st.columns(2)
+                x.caption(f"Expected: {command['expected_result'] or '—'}")
+                y.caption(f"Notes: {command['notes'] or '—'}")
+                
+                if auth.is_admin():
+                    x, y = st.columns(2)
+                    # Unique element keys are maintained via combination of ID and Sequence
+                    if x.button('👁 View', key=f"view_{command['id']}_{seq}", width='stretch'): 
+                        preview_dialog(command['id'])
+                    if y.button('✏️ Edit', key=f"edit_{command['id']}_{seq}", width='stretch'): 
+                        edit_dialog(command['id'])
+                elif st.button('👁 View Details', key=f"view_{command['id']}_{seq}", width='stretch'): 
+                    preview_dialog(command['id'])

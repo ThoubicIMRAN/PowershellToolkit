@@ -261,6 +261,44 @@ def export_json() -> bytes:
             'notes': r['notes']
         })
     return json.dumps(rows, ensure_ascii=False, indent=2).encode()
+    def save_category(data: dict[str, Any], actor='admin', category_id: int | None = None) -> int:
+    """Creates or updates a category entity in the cloud database."""
+    name = str(data.get('name', '')).strip()
+    if not name:
+        raise ValueError('Category name is required.')
+        
+    payload = {
+        'name': name,
+        'icon': str(data.get('icon', '')).strip() or None,
+        'color': str(data.get('color', '')).strip() or None
+    }
+    
+    if category_id:
+        res = db.table("categories").update(payload).eq("id", category_id).execute()
+        if not res.data:
+            raise LookupError('Category not found.')
+        action = 'UPDATE'
+        entity = category_id
+    else:
+        # Calculate the next sort order position automatically
+        max_res = db.table("categories").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+        max_order = max_res.data[0]['sort_order'] if max_res.data else 0
+        payload['sort_order'] = (max_order or 0) + 1
+        
+        res = db.table("categories").insert(payload).execute()
+        action = 'CREATE'
+        entity = res.data[0]['id']
+        
+    # Write to audit history log
+    db.table("audit_logs").insert({
+        'action': action,
+        'entity_type': 'category',
+        'entity_id': entity,
+        'actor': actor,
+        'details': name
+    }).execute()
+    
+    return int(entity)
 
 def audit_logs(limit=500):
     res = db.table("audit_logs").select("*").order("id", desc=True).limit(limit).execute()

@@ -2,10 +2,18 @@ import os
 import json
 from typing import Any
 from supabase import create_client, Client
+import streamlit as st
 
 # Initialize cloud connectivity
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+# For Streamlit Cloud: reads from secrets.toml [supabase] section
+# For Docker/local: reads from environment variables
+try:
+    SUPABASE_URL = st.secrets.get("supabase", {}).get("url") or os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY = st.secrets.get("supabase", {}).get("key") or os.getenv("SUPABASE_KEY", "")
+except Exception:
+    # Fallback if st.secrets fails (edge case)
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     # Fallback to empty client or safe mock to prevent compilation failure if missing initially

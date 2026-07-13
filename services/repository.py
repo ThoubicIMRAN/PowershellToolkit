@@ -64,7 +64,8 @@ def stats() -> dict[str, int]:
     }
 
 def list_commands(search='', category_id=None, risk='', usage='', page=1, page_size=24):
-    query = db.table("commands").select("*, categories(name, icon, color)", count="exact").eq("is_active", 1)
+    # Read from the database view to get pre-calculated category sequences
+    query = db.table("commands_view").select("*", count="exact")
     
     if search.strip():
         term = f"%{search.strip()}%"
@@ -86,11 +87,10 @@ def list_commands(search='', category_id=None, risk='', usage='', page=1, page_s
     cleaned_rows = []
     for item in res.data:
         row = dict(item)
-        cat_info = row.pop('categories', None) or {}
-        row['category'] = cat_info.get('name', 'Uncategorized')
-        row['icon'] = cat_info.get('icon')
-        row['color'] = cat_info.get('color')
-        row['category_sequence'] = 1 
+        row['category'] = row.pop('category_name', 'Uncategorized')
+        row['icon'] = row.pop('category_icon', '📁') or "📁"
+        row['color'] = row.pop('category_color', '#777777') or "#777777"
+        # row['category_sequence'] now flows beautifully from our Supabase view!
         cleaned_rows.append(row)
         
     return cleaned_rows, (res.count or 0)

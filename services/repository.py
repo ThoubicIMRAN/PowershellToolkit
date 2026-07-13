@@ -27,6 +27,50 @@ def connect() -> Iterator[sqlite3.Connection]:
     finally:
         con.close()
 
+def init_db():
+    """Initializes the database schema if it doesn't already exist."""
+    with connect() as con:
+        con.executescript('''
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY
+            );
+            
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                sort_order INTEGER,
+                icon TEXT,
+                color TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER REFERENCES categories(id),
+                title TEXT NOT NULL,
+                command_text TEXT NOT NULL,
+                purpose TEXT,
+                expected_result TEXT,
+                risk_level TEXT,
+                usage_type TEXT,
+                notes TEXT,
+                sort_order INTEGER,
+                is_active INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT,
+                entity_type TEXT,
+                entity_id INTEGER,
+                actor TEXT,
+                details TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            INSERT OR IGNORE INTO schema_version (version) VALUES (1);
+        ''')
+
 def health() -> dict[str,Any]:
     with connect() as con:
         return {'integrity':con.execute('PRAGMA integrity_check').fetchone()[0],

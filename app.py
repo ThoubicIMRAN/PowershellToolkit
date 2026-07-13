@@ -312,3 +312,34 @@ else:
                         edit_dialog(command['id'])
                 elif st.button('👁 View Details', key=f"view_{command['id']}", width='stretch'): 
                     preview_dialog(command['id'])
+if not rows:
+    st.info('No commands match your filters.')
+else:
+    grouped = {}
+    for command in rows: 
+        grouped.setdefault(command['category'], []).append(command)
+        
+    for category, items in grouped.items():
+        meta = items[0]
+        icon = meta.get('icon') or "📁"
+        color = meta.get('color') or "#777777"
+        st.markdown(f'<div class="category-title" style="color:{color}">{icon} {category} · {len(items)} shown</div>', unsafe_allow_html=True)
+        
+        # FIX: Added 'idx' using enumerate to dynamically count commands starting from 1
+        for idx, command in enumerate(items, start=1):
+            # FIX: Swapped command['category_sequence'] out for the dynamic 'idx' counter
+            with st.expander(f"{idx:02d} · {command['title']} | {command['risk_level']} · {command['usage_type']}"):
+                st.caption(command['purpose'] or 'No purpose specified')
+                st.code(command['command_text'], language='powershell')
+                x, y = st.columns(2)
+                x.caption(f"Expected: {command['expected_result'] or '—'}")
+                y.caption(f"Notes: {command['notes'] or '—'}")
+                
+                if auth.is_admin():
+                    x, y = st.columns(2)
+                    if x.button('👁 View', key=f"view_{command['id']}", width='stretch'): 
+                        preview_dialog(command['id'])
+                    if y.button('✏️ Edit', key=f"edit_{command['id']}", width='stretch'): 
+                        edit_dialog(command['id'])
+                elif st.button('👁 View Details', key=f"view_{command['id']}", width='stretch'): 
+                    preview_dialog(command['id'])

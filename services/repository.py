@@ -7,3 +7,6 @@ if DATABASE_MODE == "cloud":
     from .repo_supabase import *
 else:
     from .repo_sqlite import *
+
+# PLATFORMS, SCOPES, DEFAULT_PLATFORM, DEFAULT_SCOPE are re-exported via the * import
+# so callers can do: from services.repository import PLATFORMS, SCOPES

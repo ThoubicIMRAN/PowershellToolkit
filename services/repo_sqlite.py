@@ -13,17 +13,35 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 RISK_LEVELS = ["None", "Low", "Medium", "High"]
 USAGE_TYPES = ["User", "Admin", "User/Admin"]
 
+PLATFORMS = [
+    "Windows",
+    "Linux",
+    "Microsoft 365",
+    "GitHub",
+    "Cross-Platform",
+]
+SCOPES = [
+    "Client / Desktop",
+    "Server / Infra",
+    "Cloud / SaaS",
+    "CLI / DevOps",
+]
+DEFAULT_PLATFORM = "Windows"
+DEFAULT_SCOPE = "Client / Desktop"
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+
 def init_db():
-    """Builds the tracking schemas automatically on container boot."""
+    """Builds the tracking schemas automatically on container boot and migrates safely."""
     conn = get_db()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +51,7 @@ def init_db():
         sort_order INTEGER DEFAULT 0
     );
     """)
-    
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS commands (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,10 +65,12 @@ def init_db():
         notes TEXT,
         sort_order INTEGER DEFAULT 0,
         is_active INTEGER DEFAULT 1,
+        platform TEXT DEFAULT 'Windows',
+        scope TEXT DEFAULT 'Client / Desktop',
         FOREIGN KEY (category_id) REFERENCES categories(id)
     );
     """)
-    
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,11 +82,44 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    # Safe migration for existing databases (no data loss)
+    cursor.execute("PRAGMA table_info(commands)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+
+    if "platform" not in existing_cols:
+        cursor.execute(
+            "ALTER TABLE commands ADD COLUMN platform TEXT DEFAULT 'Windows'"
+        )
+    if "scope" not in existing_cols:
+        cursor.execute(
+            "ALTER TABLE commands ADD COLUMN scope TEXT DEFAULT 'Client / Desktop'"
+        )
+
+    # Auto-classify known M365 / Azure AD / Entra ID categories
+    # Only touches rows that still have the old defaults (idempotent)
+    cursor.execute("""
+        UPDATE commands
+        SET platform = 'Microsoft 365',
+            scope    = 'Cloud / SaaS'
+        WHERE category_id IN (
+            SELECT id FROM categories
+            WHERE lower(name) LIKE '%microsoft 365%'
+               OR lower(name) LIKE '%azure ad%'
+               OR lower(name) LIKE '%entra id%'
+               OR lower(name) LIKE '%m365%'
+        )
+        AND (platform IS NULL OR platform = 'Windows')
+        AND (scope IS NULL OR scope = 'Client / Desktop')
+    """)
+
     conn.commit()
     conn.close()
 
+
 # Initialize immediately when module is imported by Streamlit
 init_db()
+
 
 def stats():
     conn = get_db()
@@ -79,6 +132,7 @@ def stats():
     conn.close()
     return {"total": total, "categories": categories_count, "high": high, "medium": medium, "admin": admin}
 
+
 def categories():
     conn = get_db()
     rows = conn.execute("""
@@ -89,7 +143,7 @@ def categories():
         ORDER BY c.sort_order, c.name
     """).fetchall()
     conn.close()
-    
+
     result = []
     for r in rows:
         d = dict(r)
@@ -98,9 +152,19 @@ def categories():
         result.append(d)
     return result
 
-def list_commands(search='', category_id=None, risk='', usage='', page=1, page_size=24):
+
+def list_commands(
+    search='',
+    category_id=None,
+    risk='',
+    usage='',
+    platform='',
+    scope='',
+    page=1,
+    page_size=24,
+):
     conn = get_db()
-    
+
     # Leverages SQLite Window Functions for structural category-based indexing
     base_query = """
         WITH seq_cmds AS (
@@ -113,7 +177,7 @@ def list_commands(search='', category_id=None, risk='', usage='', page=1, page_s
         SELECT * FROM seq_cmds WHERE 1=1
     """
     params = []
-    
+
     if search.strip():
         base_query += " AND (title LIKE ? OR command_text LIKE ? OR purpose LIKE ? OR expected_result LIKE ? OR notes LIKE ?)"
         term = f"%{search.strip()}%"
@@ -127,21 +191,27 @@ def list_commands(search='', category_id=None, risk='', usage='', page=1, page_s
     if usage:
         base_query += " AND (usage_type = ? OR usage_type = 'User/Admin')"
         params.append(usage)
-        
+    if platform:
+        base_query += " AND platform = ?"
+        params.append(platform)
+    if scope:
+        base_query += " AND scope = ?"
+        params.append(scope)
+
     count_query = f"SELECT COUNT(*) FROM ({base_query})"
     total_count = conn.execute(count_query, params).fetchone()[0]
-    
+
     page = max(1, int(page))
     page_size = min(100, max(1, int(page_size)))
     offset = (page - 1) * page_size
-    
+
     final_query = base_query + " ORDER BY sort_order, id LIMIT ? OFFSET ?"
     extended_params = list(params)
     extended_params.extend([page_size, offset])
-    
+
     rows = conn.execute(final_query, extended_params).fetchall()
     conn.close()
-    
+
     cleaned_rows = []
     for r in rows:
         row = dict(r)
@@ -149,8 +219,9 @@ def list_commands(search='', category_id=None, risk='', usage='', page=1, page_s
         row['icon'] = row.pop('category_icon', '📁') or "📁"
         row['color'] = row.pop('category_color', '#777777') or "#777777"
         cleaned_rows.append(row)
-        
+
     return cleaned_rows, total_count
+
 
 def get_command(command_id):
     conn = get_db()
@@ -163,13 +234,14 @@ def get_command(command_id):
     conn.close()
     return dict(row) if row else None
 
+
 def save_category(data: dict[str, Any], actor='admin', category_id: int | None = None) -> int:
     name = str(data.get('name', '')).strip()
     if not name:
         raise ValueError('Category name is required.')
     icon = str(data.get('icon', '')).strip() or None
     color = str(data.get('color', '')).strip() or None
-    
+
     conn = get_db()
     cursor = conn.cursor()
     try:
@@ -180,7 +252,7 @@ def save_category(data: dict[str, Any], actor='admin', category_id: int | None =
             max_order = cursor.execute("SELECT MAX(sort_order) FROM categories").fetchone()[0] or 0
             cursor.execute("INSERT INTO categories (name, icon, color, sort_order) VALUES (?, ?, ?, ?)", (name, icon, color, max_order + 1))
             action, entity = 'CREATE', cursor.lastrowid
-        
+
         cursor.execute("INSERT INTO audit_logs (action, entity_type, entity_id, actor, details) VALUES (?, 'category', ?, ?, ?)", (action, entity, actor, name))
         conn.commit()
         return int(entity)
@@ -189,10 +261,11 @@ def save_category(data: dict[str, Any], actor='admin', category_id: int | None =
     finally:
         conn.close()
 
+
 def save_command(data: dict[str, Any], actor='admin', command_id: int | None = None) -> int:
     conn = get_db()
     cursor = conn.cursor()
-    
+
     category_id = data.get('category_id')
     title = str(data.get('title', '')).strip()
     command_text = data.get('command_text', '')
@@ -201,31 +274,46 @@ def save_command(data: dict[str, Any], actor='admin', command_id: int | None = N
     risk_level = data.get('risk_level', 'None')
     usage_type = data.get('usage_type', 'User/Admin')
     notes = data.get('notes', '')
-    
+    platform = data.get('platform') or DEFAULT_PLATFORM
+    scope = data.get('scope') or DEFAULT_SCOPE
+
     if command_id:
         cursor.execute("""
-            UPDATE commands SET category_id=?, title=?, command_text=?, purpose=?, expected_result=?, risk_level=?, usage_type=?, notes=? WHERE id=?
-        """, (category_id, title, command_text, purpose, expected_result, risk_level, usage_type, notes, command_id))
+            UPDATE commands
+            SET category_id=?, title=?, command_text=?, purpose=?, expected_result=?,
+                risk_level=?, usage_type=?, notes=?, platform=?, scope=?
+            WHERE id=?
+        """, (category_id, title, command_text, purpose, expected_result,
+              risk_level, usage_type, notes, platform, scope, command_id))
         action, entity = 'UPDATE', command_id
     else:
         max_order = cursor.execute("SELECT MAX(sort_order) FROM commands").fetchone()[0] or 0
         cursor.execute("""
-            INSERT INTO commands (category_id, title, command_text, purpose, expected_result, risk_level, usage_type, notes, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (category_id, title, command_text, purpose, expected_result, risk_level, usage_type, notes, max_order + 1))
+            INSERT INTO commands (
+                category_id, title, command_text, purpose, expected_result,
+                risk_level, usage_type, notes, sort_order, platform, scope
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (category_id, title, command_text, purpose, expected_result,
+              risk_level, usage_type, notes, max_order + 1, platform, scope))
         action, entity = 'CREATE', cursor.lastrowid
-        
-    cursor.execute("INSERT INTO audit_logs (action, entity_type, entity_id, actor, details) VALUES (?, 'command', ?, ?, ?)", (action, entity, actor, title))
+
+    cursor.execute(
+        "INSERT INTO audit_logs (action, entity_type, entity_id, actor, details) VALUES (?, 'command', ?, ?, ?)",
+        (action, entity, actor, title),
+    )
     conn.commit()
     conn.close()
     return int(entity)
+
 
 def health():
     conn = get_db()
     commands_count = conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0]
     categories_count = conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
     conn.close()
-    return {"commands": commands_count, "categories": categories_count, "integrity": "ok", "schema_version": "1.0", "foreign_key_errors": 0}
+    return {"commands": commands_count, "categories": categories_count, "integrity": "ok", "schema_version": "1.1", "foreign_key_errors": 0}
+
 
 def audit_logs():
     conn = get_db()
@@ -233,10 +321,14 @@ def audit_logs():
     conn.close()
     return [dict(r) for r in rows]
 
+
 def export_json():
     conn = get_db()
     rows = conn.execute("""
-        SELECT cmd.id, c.name as category, cmd.title, cmd.command_text as cmd, cmd.purpose, cmd.expected_result as result, cmd.risk_level as risk, cmd.usage_type as usage, cmd.notes
+        SELECT cmd.id, c.name as category, cmd.title, cmd.command_text as cmd,
+               cmd.purpose, cmd.expected_result as result, cmd.risk_level as risk,
+               cmd.usage_type as usage, cmd.notes,
+               cmd.platform, cmd.scope
         FROM commands cmd
         JOIN categories c ON cmd.category_id = c.id
         WHERE cmd.is_active = 1
@@ -244,38 +336,57 @@ def export_json():
     conn.close()
     return json.dumps([dict(r) for r in rows], indent=2).encode('utf-8')
 
+
 def import_json(json_bytes):
     data = json.loads(json_bytes.decode('utf-8'))
     conn = get_db()
     cursor = conn.cursor()
     added, skipped = 0, 0
-    
+
     for item in data:
         cat_name = item.get('category', 'Uncategorized').strip()
         title = item.get('title', '').strip()
         cmd_text = item.get('cmd', '').strip()
-        
+
         cursor.execute("SELECT id FROM categories WHERE name = ?", (cat_name,))
         cat_row = cursor.fetchone()
         if cat_row:
             cat_id = cat_row[0]
         else:
             max_cat_order = cursor.execute("SELECT MAX(sort_order) FROM categories").fetchone()[0] or 0
-            cursor.execute("INSERT INTO categories (name, icon, color, sort_order) VALUES (?, '📁', '#777777', ?)", (cat_name, max_cat_order + 1))
+            cursor.execute(
+                "INSERT INTO categories (name, icon, color, sort_order) VALUES (?, '📁', '#777777', ?)",
+                (cat_name, max_cat_order + 1),
+            )
             cat_id = cursor.lastrowid
-            
-        cursor.execute("SELECT id FROM commands WHERE title = ? AND command_text = ? AND is_active = 1", (title, cmd_text))
+
+        cursor.execute(
+            "SELECT id FROM commands WHERE title = ? AND command_text = ? AND is_active = 1",
+            (title, cmd_text),
+        )
         if cursor.fetchone():
             skipped += 1
             continue
-            
+
         max_cmd_order = cursor.execute("SELECT MAX(sort_order) FROM commands").fetchone()[0] or 0
+        platform = item.get('platform') or DEFAULT_PLATFORM
+        scope = item.get('scope') or DEFAULT_SCOPE
+
         cursor.execute("""
-            INSERT INTO commands (category_id, title, command_text, purpose, expected_result, risk_level, usage_type, notes, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (cat_id, title, cmd_text, item.get('purpose',''), item.get('result',''), item.get('risk','None'), item.get('usage','User/Admin'), item.get('notes',''), max_cmd_order + 1))
+            INSERT INTO commands (
+                category_id, title, command_text, purpose, expected_result,
+                risk_level, usage_type, notes, sort_order, platform, scope
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            cat_id, title, cmd_text,
+            item.get('purpose', ''), item.get('result', ''),
+            item.get('risk', 'None'), item.get('usage', 'User/Admin'),
+            item.get('notes', ''), max_cmd_order + 1,
+            platform, scope,
+        ))
         added += 1
-        
+
     conn.commit()
     conn.close()
     return added, skipped

@@ -1,10 +1,13 @@
 import os
 import sqlite3
 import json
+from pathlib import Path
 from typing import Any
 
-# Match your specific container volume pathway exactly
-DB_PATH = "/app/database/ps_toolkit.db"
+# Resolves to /app/database/ps_toolkit.db inside the container (same as before),
+# but also works for local runs. Override with PS_TOOLKIT_DB_PATH if needed.
+_DEFAULT_DB = Path(__file__).resolve().parents[1] / "database" / "ps_toolkit.db"
+DB_PATH = os.getenv("PS_TOOLKIT_DB_PATH", str(_DEFAULT_DB))
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 RISK_LEVELS = ["None", "Low", "Medium", "High"]

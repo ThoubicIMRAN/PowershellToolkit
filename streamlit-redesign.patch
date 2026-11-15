@@ -1,0 +1,1193 @@
+diff --git a/.streamlit/config.toml b/.streamlit/config.toml
+new file mode 100644
+index 0000000..94127e9
+--- /dev/null
++++ b/.streamlit/config.toml
+@@ -0,0 +1,15 @@
++[theme]
++base = "dark"
++primaryColor = "#3b82f6"
++backgroundColor = "#080d18"
++secondaryBackgroundColor = "#0e1525"
++textColor = "#dde6f5"
++font = "sans serif"
++codeFont = "monospace"
++baseRadius = "8px"
++
++[client]
++toolbarMode = "minimal"
++
++[browser]
++gatherUsageStats = false
+diff --git a/app.py b/app.py
+index 5ebf920..70897a7 100644
+--- a/app.py
++++ b/app.py
+@@ -1,320 +1,74 @@
+ from __future__ import annotations
+ import math
+-from datetime import date
+-from pathlib import Path
+-import pandas as pd
+ import streamlit as st
+-from services import auth, repository as repo
+ 
+-st.set_page_config(page_title='PowerShell Master Toolkit', page_icon='⚡', layout='wide', initial_sidebar_state='expanded')
+-st.markdown(f'<style>{(Path(__file__).parent/"assets/theme.css").read_text(encoding="utf-8")}</style>', unsafe_allow_html=True)
+-for key, value in {'role': 'User', 'route': 'Library', 'active_category': None, 'page': 1}.items(): 
++st.set_page_config(page_title='PowerShell Master Toolkit', page_icon='⚡', layout='wide',
++                   initial_sidebar_state='auto')
++
++from services import repository as repo          # noqa: E402  (after set_page_config by design)
++from ui import components as ui                   # noqa: E402
++from ui.admin import render_admin                 # noqa: E402
++from ui.dialogs import add_dialog, edit_dialog, preview_dialog  # noqa: E402
++from ui.theme import build_css                    # noqa: E402
++
++PAGE_SIZES = [12, 24, 48, 96]
++for key, value in {'role': 'User', 'route': 'Library', 'active_category': None, 'page': 1, 'page_size': 24}.items():
+     st.session_state.setdefault(key, value)
+ 
+-def reset_filters():
++
++def reset_page() -> None:
++    st.session_state.page = 1
++
++
++def reset_filters() -> None:
+     st.session_state.search = ''
+     st.session_state.risk = 'All Risks'
+     st.session_state.usage = 'All Usage'
+     st.session_state.active_category = None
+     st.session_state.page = 1
+ 
+-def command_form(command=None):
+-    if not auth.is_admin(): 
+-        st.error('Administrator permission is required.')
+-        return
+-    cats = repo.categories()
+-    names = [x['name'] for x in cats]
+-    ids = {x['name']: x['id'] for x in cats}
+-    selected = names.index(command['category']) if command and command['category'] in names else 0
+-    
+-    with st.form(f"command_{command['id'] if command else 'new'}"):
+-        a, b = st.columns(2)
+-        category = a.selectbox('Category', names, index=selected)
+-        title = b.text_input('Title *', value=command['title'] if command else '')
+-        text = st.text_area('PowerShell Command *', value=command['command_text'] if command else '', height=150)
+-        
+-        a, b = st.columns(2)
+-        purpose = a.text_input('Purpose', value=command['purpose'] if command else '')
+-        expected = b.text_input('Expected Result', value=command['expected_result'] if command else '')
+-        
+-        a, b = st.columns(2)
+-        risk = a.selectbox('Risk Level', repo.RISK_LEVELS, index=repo.RISK_LEVELS.index(command['risk_level']) if command else 0)
+-        usage = b.selectbox('Usage', repo.USAGE_TYPES, index=repo.USAGE_TYPES.index(command['usage_type']) if command else 2)
+-        notes = st.text_input('Notes / Cautions', value=command['notes'] if command else '')
+-        
+-        # 2026 FIX: Replaced use_container_width with width='stretch'
+-        if st.form_submit_button('Save Command', type='primary', width='stretch'):
+-            try:
+-                repo.save_command({
+-                    'category_id': ids[category], 'title': title, 'command_text': text, 
+-                    'purpose': purpose, 'expected_result': expected, 'risk_level': risk, 
+-                    'usage_type': usage, 'notes': notes
+-                }, command_id=command['id'] if command else None)
+-                st.success('Command saved.')
+-                st.rerun()
+-            except Exception as error: 
+-                st.error(str(error))
+-
+-@st.dialog('Add Command', width='large')
+-def add_dialog(): 
+-    command_form()
+-
+-@st.dialog('Edit Command', width='large')
+-def edit_dialog(command_id):
+-    command = repo.get_command(command_id)
+-    if command: 
+-        command_form(command)
+-    else: 
+-        st.error('Command not found.')
+-
+-@st.dialog('Command Preview', width='large')
+-def preview_dialog(command_id):
+-    command = repo.get_command(command_id)
+-    if not command: 
+-        st.error('Command not found.')
+-        return
+-    st.subheader(f"#{command['id']} — {command['title']}")
+-    st.caption('Use the copy icon in the code block.')
+-    st.code(command['command_text'], language='powershell')
+-    
+-    a, b = st.columns(2)
+-    a.markdown(f"**Purpose**\n\n{command['purpose'] or '—'}")
+-    b.markdown(f"**Expected Result**\n\n{command['expected_result'] or '—'}")
+-    
+-    a, b = st.columns(2)
+-    a.markdown(f"**Risk Level**\n\n{command['risk_level']}")
+-    b.markdown(f"**Usage**\n\n{command['usage_type']}")
+-    st.markdown(f"**Category**\n\n{command['category']}")
+-    
+-    if command['notes']: 
+-        st.warning(command['notes'])
+-    
+-    # 2026 FIX: Replaced use_container_width with width='stretch'
+-    if auth.is_admin() and st.button('✏️ Edit This Command', type='primary', width='stretch'): 
+-        st.session_state.pending_edit = command_id
+-        st.rerun()
+ 
+ summary = repo.stats()
+ categories = repo.categories()
++st.markdown(build_css(categories), unsafe_allow_html=True)
+ 
+-with st.sidebar:
+-    st.markdown('<div class="brand">⚡ PS TOOLKIT</div>', unsafe_allow_html=True)
+-    st.markdown(f'<div class="brand-sub">{summary["total"]} Commands · {summary["categories"]} Categories</div>', unsafe_allow_html=True)
+-    
+-    # 2026 FIX: Replaced use_container_width with width='stretch'
+-    if st.button(f"📋 All Commands · {summary['total']}", width='stretch', type='primary' if st.session_state.active_category is None else 'secondary'): 
+-        st.session_state.active_category = None
+-        st.session_state.page = 1
+-        st.session_state.route = 'Library'
+-        st.rerun()
+-        
+-    st.caption('CATEGORIES')
+-    for item in categories:
+-        # STRINGS FIX: Defensive check to prevent literal "None" string prefixes from showing up
+-        icon = item.get('icon') or "📁"
+-        if st.button(f"{icon} {item['name']} · {item['command_count']}", key=f"cat_{item['id']}", width='stretch', type='primary' if st.session_state.active_category == item['id'] else 'secondary'): 
+-            st.session_state.active_category = item['id']
+-            st.session_state.page = 1
+-            st.session_state.route = 'Library'
+-            st.rerun()
+-            
+-    st.divider()
+-    st.caption('ACCOUNT')
+-    st.markdown(f"**Role:** {st.session_state.role}")
+-    
+-    # 2026 FIX: Replaced use_container_width with width='stretch'
+-    if auth.is_admin():
+-        if st.button('⚙ Administration', width='stretch'): 
+-            st.session_state.route = 'Administration'
+-            st.rerun()
+-        if st.button('Sign Out', width='stretch'): 
+-            auth.logout()
+-            st.rerun()
+-    else:
+-        if st.button('🔐 Administrator Sign-in', width='stretch'): 
+-            st.session_state.route = 'Administration'
+-            st.rerun()
+-            
+-    st.divider()
+-    st.caption('USER ACTIONS')
+-    # 2026 FIX: Replaced use_container_width with width='stretch'
+-    st.download_button('↓ Export JSON', repo.export_json(), f'ps_toolkit_{date.today()}.json', 'application/json', width='stretch')
++if st.session_state.get('flash'):
++    message, icon = st.session_state.pop('flash')
++    st.toast(message, icon=icon)
++
++ui.render_sidebar(summary, categories)
+ 
+ if st.session_state.get('pending_edit'):
+-    command_id = st.session_state.pop('pending_edit')
+-    edit_dialog(command_id)
++    edit_dialog(st.session_state.pop('pending_edit'))
+ 
+ if st.session_state.route == 'Administration':
+-    st.title('Administration')
+-    if not auth.is_admin():
+-        st.info('Administrator authentication is required to add, edit or import commands.')
+-        if not auth.configured(): 
+-            st.error('Admin authentication is not configured. Set auth.admin_password_hash in .streamlit/secrets.toml or PS_TOOLKIT_ADMIN_PASSWORD_HASH.')
+-        with st.form('admin_login'):
+-            password = st.text_input('Administrator password', type='password')
+-            # 2026 FIX: Replaced use_container_width with width='stretch'
+-            if st.form_submit_button('Sign In', type='primary', width='stretch'):
+-                if auth.login(password): 
+-                    st.success('Access granted.')
+-                    st.rerun()
+-                else: 
+-                    st.error('Invalid administrator credentials.')
+-        if st.button('← Return to Library'): 
+-            st.session_state.route = 'Library'
+-            st.rerun()
+-        st.stop()
+-        
+-    h = repo.health()
+-    metrics = st.columns(4)
+-    for col, (label, value) in zip(metrics, [('Commands', h['commands']), ('Categories', h['categories']), ('Integrity', h['integrity']), ('Schema', h['schema_version'])]): 
+-        col.metric(label, value)
+-        
+-    manage, transfer, audit = st.tabs(['Command Management', 'Import / Export', 'Audit & Health'])
+-    
+-    with manage:
+-        st.caption('Administrators can add and edit commands. Command deletion is intentionally disabled.')
+-        if st.button('＋ Add New Command', type='primary'): 
+-            add_dialog()
+-            
+-        search = st.text_input('Find command to edit', placeholder='Search by title or command')
+-        rows, total = repo.list_commands(search=search, page_size=20)
+-        for command in rows:
+-            a, b = st.columns([5, 1])
+-            a.write(f"**{command['title']}** · {command['category']}")
+-            # 2026 FIX: Replaced use_container_width with width='stretch'
+-            if b.button('Edit', key=f"admin_edit_{command['id']}", width='stretch'): 
+-                edit_dialog(command['id'])
+-                
+-        # ---- INTEGRATED FEATURE MODULE: CATEGORY MANAGEMENT PANEL ----
+-        st.write("---")
+-        st.subheader("📁 Manage Categories")
+-        cat_action = st.radio("Choose Action", ["Add New Category", "Edit Existing Category"], horizontal=True)
+-        
+-        if cat_action == "Add New Category":
+-            with st.form("add_category_form"):
+-                new_name = st.text_input("Category Name", placeholder="e.g., Active Directory")
+-                new_icon = st.text_input("Emoji Icon", placeholder="e.g., 🔑")
+-                new_color = st.color_picker("Category Color Theme", "#777777")
+-                if st.form_submit_button("Create Category", type="primary", width='stretch'):
+-                    if new_name.strip():
+-                        try:
+-                            # Calls the newly injected backend function
+-                            repo.save_category({"name": new_name, "icon": new_icon, "color": new_color})
+-                            st.success(f"Category '{new_name}' created successfully!")
+-                            st.rerun()
+-                        except Exception as e:
+-                            st.error(f"Error saving category: {e}")
+-                    else:
+-                        st.warning("Category name field cannot be blank.")
+-                        
+-        elif cat_action == "Edit Existing Category":
+-            cat_options = {c['name']: c for c in categories}
+-            if cat_options:
+-                selected_cat_name = st.selectbox("Select Category to Modify", list(cat_options.keys()))
+-                target_cat = cat_options[selected_cat_name]
+-                with st.form("edit_category_form"):
+-                    edit_name = st.text_input("Category Name", value=target_cat['name'])
+-                    edit_icon = st.text_input("Emoji Icon", value=target_cat.get('icon') or '📁')
+-                    current_color = target_cat.get('color') if str(target_cat.get('color')).startswith('#') else '#777777'
+-                    edit_color = st.color_picker("Category Color Theme", value=current_color)
+-                    if st.form_submit_button("Save Category Changes", type="primary", width='stretch'):
+-                        try:
+-                            repo.save_category({"name": edit_name, "icon": edit_icon, "color": edit_color}, category_id=target_cat['id'])
+-                            st.success("Category structural properties updated!")
+-                            st.rerun()
+-                        except Exception as e:
+-                            st.error(f"Error: {e}")
+-            else:
+-                st.info("No active categories found to modify.")
+-                
+-    with transfer:
+-        uploaded = st.file_uploader('Import JSON', type=['json'])
+-        if uploaded and st.button('Import Commands', type='primary'):
+-            try: 
+-                added, skipped = repo.import_json(uploaded.getvalue())
+-                st.success(f'Imported {added}; skipped {skipped}.')
+-                st.rerun()
+-            except Exception as error: 
+-                st.error(str(error))
+-        st.download_button('Export Current Commands', repo.export_json(), f'ps_toolkit_{date.today()}.json', 'application/json')
+-        
+-    with audit:
+-        if h['integrity'] == 'ok' and h['foreign_key_errors'] == 0: 
+-            st.success('Database integrity and foreign-key checks passed.')
+-        else: 
+-            st.error(f"Integrity: {h['integrity']}; foreign-key issues: {h['foreign_key_errors']}")
+-        # 2026 FIX: Replaced use_container_width with width='stretch'
+-        st.dataframe(pd.DataFrame(repo.audit_logs()), width='stretch', hide_index=True)
+-        
+-    if st.button('← Return to Command Library'): 
+-        st.session_state.route = 'Library'
+-        st.rerun()
+-    st.stop()
++    render_admin(categories)      # calls st.stop()
+ 
+-search_col, risk_col, usage_col, size_col, reset_col = st.columns([4, 1.45, 1.45, 1, 1.25])
+-search = search_col.text_input('Search', placeholder='Search commands, titles, purpose, category...', key='search', label_visibility='collapsed')
+-risk_choice = risk_col.selectbox('Risk', ['All Risks', *repo.RISK_LEVELS], key='risk', label_visibility='collapsed')
+-usage_choice = usage_col.selectbox('Usage', ['All Usage', *repo.USAGE_TYPES], key='usage', label_visibility='collapsed')
+-page_size = size_col.selectbox('Page size', [12, 24, 48, 96], index=1, label_visibility='collapsed')
+-# 2026 FIX: Replaced use_container_width with width='stretch'
+-reset_col.button('↺ Reset Filters', width='stretch', on_click=reset_filters, help='Clear filters without changing data')
++# ── Library ──────────────────────────────────────────────
++with st.container(key='sticky_head'):
++    search, risk, usage = ui.render_toolbar(reset_page, reset_filters, add_dialog)
++    page_size = st.session_state.page_size
++    rows, total = repo.list_commands(search, st.session_state.active_category, risk, usage,
++                                     st.session_state.page, page_size)
++    pages = max(1, math.ceil(total / page_size))
++    ui.render_stats(summary, total)
+ 
+-risk = '' if risk_choice == 'All Risks' else risk_choice
+-usage = '' if usage_choice == 'All Usage' else usage_choice
+-rows, total = repo.list_commands(search, st.session_state.active_category, risk, usage, st.session_state.page, page_size)
+-pages = max(1, math.ceil(total / page_size))
+-
+-if st.session_state.page > pages: 
++if st.session_state.page > pages:
+     st.session_state.page = pages
+     st.rerun()
+-    
+-metrics = st.columns(6)
+-for col, (label, value) in zip(metrics, [('📋 Total', summary['total']), ('📂 Categories', summary['categories']), ('🔍 Showing', total), ('🔴 High Risk', summary['high']), ('🟠 Medium Risk', summary['medium']), ('🛡 Admin Only', summary['admin'])]): 
+-    col.metric(label, value)
+-    
+-a, b, c = st.columns([1, 3, 1])
+-# 2026 FIX: Replaced use_container_width with width='stretch'
+-if a.button('← Previous', disabled=st.session_state.page <= 1, width='stretch'): 
+-    st.session_state.page -= 1
+-    st.rerun()
+-b.markdown(f"<p class='hint' style='text-align:center'>Page {st.session_state.page} of {pages} · {total} matching commands</p>", unsafe_allow_html=True)
+-# 2026 FIX: Replaced use_container_width with width='stretch'
+-if c.button('Next →', disabled=st.session_state.page >= pages, width='stretch'): 
+-    st.session_state.page += 1
+-    st.rerun()
+-    
+ 
+-if not rows:
+-    st.info('No commands match your filters.')
+-else:
+-    grouped = {}
+-    for command in rows: 
+-        grouped.setdefault(command['category'], []).append(command)
+-        
+-    for category, items in grouped.items():
+-        meta = items[0]
+-        icon = meta.get('icon') or "📁"
+-        color = meta.get('color') or "#777777"
+-        st.markdown(f'<div class="category-title" style="color:{color}">{icon} {category} · {len(items)} shown</div>', unsafe_allow_html=True)
+-        
+-        # FIX: Swapped back to iterating commands directly without local counters
+-        for command in items:
+-            # Pull the persistent, database-wide structural counter
+-            seq = int(command.get('category_sequence', 1))
+-            
+-            with st.expander(f"{seq:02d} · {command['title']} | {command['risk_level']} · {command['usage_type']}"):
+-                st.caption(command['purpose'] or 'No purpose specified')
+-                st.code(command['command_text'], language='powershell')
+-                x, y = st.columns(2)
+-                x.caption(f"Expected: {command['expected_result'] or '—'}")
+-                y.caption(f"Notes: {command['notes'] or '—'}")
+-                
+-                if auth.is_admin():
+-                    x, y = st.columns(2)
+-                    # Unique element keys are maintained via combination of ID and Sequence
+-                    if x.button('👁 View', key=f"view_{command['id']}_{seq}", width='stretch'): 
+-                        preview_dialog(command['id'])
+-                    if y.button('✏️ Edit', key=f"edit_{command['id']}_{seq}", width='stretch'): 
+-                        edit_dialog(command['id'])
+-                elif st.button('👁 View Details', key=f"view_{command['id']}_{seq}", width='stretch'): 
+-                    preview_dialog(command['id'])
++with st.container(key='grid'):
++    if not rows:
++        ui.empty_state()
++    else:
++        grouped: dict[str, list[dict]] = {}
++        for command in rows:
++            grouped.setdefault(command['category'], []).append(command)
++        for category, items in grouped.items():
++            meta = items[0]
++            ui.section_header(category, meta.get('icon') or '📁', meta.get('color'), len(items))
++            for command in items:
++                ui.command_card(command, on_view=preview_dialog, on_edit=edit_dialog)
++
++ui.render_pager(total, pages, PAGE_SIZES, reset_page)
++ui.copy_script()
+diff --git a/assets/theme.css b/assets/theme.css
+index 55ddaa5..5fd8397 100644
+--- a/assets/theme.css
++++ b/assets/theme.css
+@@ -1,11 +1,228 @@
+-:root{--bg:#080d18;--panel:#0e1525;--card:#121b2e;--border:#1c2d47;--border2:#243450;--blue:#3b82f6;--cyan:#22d3ee;--text:#dde6f5;--muted:#64748b}
+-.stApp{background:var(--bg);color:var(--text)}[data-testid="stSidebar"]{background:var(--panel);border-right:1px solid var(--border)}
+-[data-testid="stAppViewContainer"] .block-container{max-width:1600px;padding:4.25rem 1.4rem 2rem!important}
+-[data-testid="stHeader"]{z-index:999!important}[data-testid="stAppViewContainer"]>.main{overflow-y:auto!important}
+-.brand{font-weight:800;letter-spacing:.08em;color:var(--cyan);font-size:1.05rem}.brand-sub{font:11px monospace;color:var(--muted);margin-bottom:.8rem}
+-[data-testid="stMetric"]{background:linear-gradient(145deg,var(--panel),var(--card));border:1px solid var(--border);border-radius:10px;padding:.65rem .8rem}
+-[data-testid="stExpander"]{background:var(--card);border:1px solid var(--border);border-radius:10px;margin:.35rem 0;overflow:hidden}
+-[data-testid="stExpander"]:hover{border-color:#3b82f680;box-shadow:0 5px 18px #0005}.stButton>button,.stDownloadButton>button{border-radius:8px;font-weight:700;border-color:var(--border2)}
+-[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,[data-testid="stSelectbox"]>div>div{background:var(--card);border-color:var(--border2)}
+-code{font-family:Consolas,'JetBrains Mono',monospace!important;color:var(--cyan)!important;white-space:pre-wrap!important}.category-title{font-weight:800;letter-spacing:.07em;text-transform:uppercase;margin:1rem 0 .2rem}.hint{color:var(--muted);font-size:.75rem}
+-@media(max-width:900px){[data-testid="stAppViewContainer"] .block-container{padding:4.5rem .8rem 2rem!important}}
++@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;600;700;800&display=swap');
++
++/* ══ DESIGN TOKENS (single source of truth — mirrors PowerShell_Toolkit_v4 reference) ══ */
++:root{
++  --bg:#080d18;--panel:#0e1525;--card:#121b2e;--card2:#162035;
++  --border:#1c2d47;--border2:#243450;
++  --blue:#3b82f6;--blue-d:#1d4ed8;--blue-g:rgba(59,130,246,.12);
++  --cyan:#22d3ee;--green:#34d399;--yellow:#fbbf24;
++  --red:#f87171;--orange:#fb923c;--purple:#a78bfa;--pink:#f472b6;
++  --text:#dde6f5;--text2:#94a3b8;--text3:#4b6080;
++  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
++  --sans:'DM Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
++  --r6:6px;--r8:8px;--r10:10px;--r12:12px;--r14:14px;
++  --shadow:0 8px 32px rgba(0,0,0,.6);
++  --card-h:240px;
++}
++
++/* ══ GLOBAL ══ */
++.stApp,.stApp p,.stApp label,.stApp button,.stApp input,.stApp textarea,.stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp li,.stApp td,.stApp th,[data-baseweb]{font-family:var(--sans)}
++[data-testid="stIconMaterial"],.material-icons,[class*="material-symbols"]{font-family:"Material Symbols Rounded","Material Symbols Outlined"!important}
++.stApp{background:var(--bg);color:var(--text)}
++[data-testid="stHeader"]{background:transparent}
++[data-testid="stMainBlockContainer"],.stMainBlockContainer{max-width:none;padding:3.2rem 1.1rem 2rem!important}
++h1,h2,h3,h4{font-family:var(--sans)!important;color:var(--text);font-weight:700;letter-spacing:0}
++[data-testid="stMainBlockContainer"] h1{font-size:1.5rem;padding:.2rem 0 .6rem}
++[data-testid="stMainBlockContainer"] h3{font-size:1.05rem}
++::-webkit-scrollbar{width:5px;height:5px}
++::-webkit-scrollbar-track{background:transparent}
++::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
++::-webkit-scrollbar-thumb:hover{background:#2e4268}
++[data-testid="stVerticalBlock"]{gap:.5rem}
++
++/* ══ SIDEBAR ══ */
++[data-testid="stSidebar"]{background:var(--panel);border-right:1px solid var(--border)}
++[data-testid="stSidebarContent"]{padding:0}
++[data-testid="stSidebarHeader"]{height:2.4rem;min-height:0;padding:.4rem .6rem;margin:0}
++[data-testid="stSidebarUserContent"]{padding:0!important}
++[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:0}
++.s-logo{padding:16px 14px 14px;border-bottom:1px solid var(--border);
++  background:linear-gradient(135deg,rgba(59,130,246,.08),transparent)}
++.s-logo h1{font-size:13px!important;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
++  color:var(--cyan)!important;line-height:1.2;margin:0;padding:0}
++.s-logo p{font-size:10px;color:var(--text3);font-family:var(--mono);margin:3px 0 0}
++.st-key-side_nav{padding:8px 6px;gap:1px!important}
++.s-nav-label{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--text3);
++  padding:0 8px;display:block;margin:8px 0 4px}
++.st-key-side_nav .stButton{margin-bottom:1px}
++.st-key-side_nav .stButton button{width:100%;justify-content:flex-start;text-align:left;background:transparent;
++  border:none;color:var(--text2);padding:6px 9px;min-height:0;border-radius:7px;
++  font-size:11.5px;font-weight:500;line-height:1.2;transition:all .13s;box-shadow:none}
++.st-key-side_nav .stButton button p{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
++  text-align:left;font-weight:inherit}
++.st-key-side_nav .stButton button>div{justify-content:flex-start;width:100%}
++.st-key-side_nav .stButton button:hover{background:var(--border);color:var(--text)}
++.st-key-side_nav .stButton button[data-testid="stBaseButton-primary"]{background:var(--blue-g);color:var(--blue);font-weight:700}
++[data-testid="stLayoutWrapper"]:has(>.st-key-side_footer){position:sticky;bottom:0;z-index:5;background:var(--panel)}
++.st-key-side_footer{background:var(--panel);border-top:1px solid var(--border);padding:10px;gap:6px!important}
++.st-key-side_footer button{padding:.25rem .3rem;font-size:11px;white-space:nowrap}
++.st-key-side_footer button p{font-size:11px}
++.s-role{font-size:10px;color:var(--text3);font-family:var(--mono);padding:4px 2px 0}
++.s-role b{color:var(--text2)}
++
++/* ══ BUTTONS ══ */
++.stButton button,.stDownloadButton button,[data-testid="stFormSubmitButton"] button{
++  background:var(--card);border:1px solid var(--border2);color:var(--text2);border-radius:var(--r8);
++  font-size:12px;font-weight:700;min-height:2.1rem;padding:.25rem .6rem;transition:all .13s;box-shadow:none}
++.stButton button:hover,.stDownloadButton button:hover{border-color:var(--blue);color:var(--blue);background:var(--card)}
++.stButton button:disabled,.stDownloadButton button:disabled{opacity:.4;cursor:not-allowed}
++.stButton button[data-testid="stBaseButton-primary"],
++.stDownloadButton button[data-testid="stBaseButton-primary"],
++[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]{
++  background:var(--blue-d);border-color:var(--blue);color:#fff}
++.stButton button[data-testid="stBaseButton-primary"]:hover,
++.stDownloadButton button[data-testid="stBaseButton-primary"]:hover,
++[data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primaryFormSubmit"]:hover{
++  background:var(--blue);color:#fff;border-color:var(--blue)}
++.stButton button p,.stDownloadButton button p{font-size:inherit;font-weight:inherit}
++
++/* ══ INPUTS ══ */
++[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea,
++[data-baseweb="select"]>div,[data-baseweb="input"],[data-baseweb="base-input"]{
++  background:var(--card)!important;border-color:var(--border)!important;color:var(--text);border-radius:var(--r8)!important}
++[data-testid="stTextInput"] input{font-size:12px;font-family:var(--mono);padding:.45rem .7rem}
++[data-testid="stTextArea"] textarea{font-family:var(--mono);font-size:11.5px;line-height:1.55}
++[data-testid="stTextInput"] input::placeholder,[data-testid="stTextArea"] textarea::placeholder{color:var(--text3)}
++[data-baseweb="select"]>div{font-size:11.5px;color:var(--text2);min-height:2.1rem}
++[data-baseweb="select"] *{color:inherit}
++[data-testid="stTextInput"] [data-baseweb="input"]:focus-within,
++[data-testid="stTextArea"] [data-baseweb="textarea"]:focus-within,
++[data-baseweb="select"]>div:focus-within{border-color:var(--blue)!important;box-shadow:0 0 0 1px var(--blue)!important}
++[data-baseweb="popover"] [role="listbox"],[data-baseweb="menu"]{background:var(--panel)!important;border:1px solid var(--border2)}
++[data-baseweb="popover"] li{background:var(--panel);font-size:12px}
++[data-baseweb="popover"] li:hover{background:var(--border)}
++[data-testid="stWidgetLabel"] p{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);font-weight:600}
++.st-key-search input{padding-left:33px!important;
++  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234b6080' stroke-width='2'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
++  background-repeat:no-repeat;background-position:10px center;background-size:14px}
++
++/* ══ STICKY TOOLBAR + STATS ══ */
++[data-testid="stLayoutWrapper"]:has(>.st-key-sticky_head){position:sticky;top:2.9rem;z-index:50;background:var(--bg);margin:-0.4rem -1.1rem 0}
++.st-key-sticky_head{gap:0!important;padding:0}
++.st-key-sticky_head [data-testid="stHorizontalBlock"]{background:var(--panel);border-bottom:1px solid var(--border);
++  padding:10px 16px;gap:9px}
++.statsbar{padding:7px 16px;display:flex;border-bottom:1px solid var(--border);background:var(--panel);overflow-x:auto}
++.stat{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text3);padding:0 12px;
++  border-right:1px solid var(--border);white-space:nowrap}
++.stat:first-child{padding-left:0}.stat:last-child{border-right:none}
++.stat b{color:var(--text);font-size:13px;font-weight:700}
++.st-key-btn_reset button{background:transparent;color:var(--text3)}
++.st-key-btn_reset button:hover{border-color:var(--red);color:var(--red)}
++
++/* ══ GRID ══ */
++.st-key-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
++  gap:12px!important;align-items:stretch;padding-top:16px}
++.st-key-grid>[data-testid="stElementContainer"]{grid-column:1/-1}
++.sec-hdr{display:flex;align-items:center;gap:12px;padding:12px 0 4px;margin-top:4px}
++.sec-hdr h3{font-size:11px!important;font-weight:800;text-transform:uppercase;letter-spacing:.1em;white-space:nowrap;margin:0;padding:0}
++.sec-hdr-line{flex:1;height:1px;background:var(--border)}
++.sec-hdr-count{font-size:9px;color:var(--text3);font-family:var(--mono);background:var(--border2);
++  padding:1px 7px;border-radius:20px;flex-shrink:0}
++.empty{display:flex;flex-direction:column;align-items:center;gap:14px;padding:80px;color:var(--text3)}
++.empty svg{opacity:.25}
++
++/* ══ COMMAND CARD ══ */
++[class*="st-key-card_"]{--accent:var(--blue);background:var(--card);border:1px solid var(--border);
++  border-radius:var(--r10);display:flex!important;flex-direction:column;position:relative;overflow:hidden;
++  height:var(--card-h)!important;flex:none!important;gap:0!important;transition:border-color .15s,box-shadow .15s,transform .1s}
++[class*="st-key-card_"]:hover{border-color:var(--accent);box-shadow:0 4px 20px rgba(0,0,0,.4);transform:translateY(-2px)}
++[class*="st-key-card_"]::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;
++  background:var(--accent);border-radius:var(--r10) 0 0 var(--r10);z-index:2}
++[class*="st-key-card_"]>[data-testid="stElementContainer"]:first-child{flex:1;min-height:0}
++[class*="st-key-card_"] [data-testid="stHtml"],[class*="st-key-card_"] .cmd-body{height:100%}
++.cmd-body{display:flex;flex-direction:column;min-height:0}
++.card-top{padding:12px 12px 0 15px;flex-shrink:0}
++.card-head-row{display:flex;align-items:flex-start;gap:8px}
++.card-id{min-width:26px;height:26px;padding:0 3px;flex-shrink:0;background:var(--blue-g);
++  border:1px solid rgba(59,130,246,.25);color:var(--blue);border-radius:6px;font-size:9px;font-weight:700;
++  font-family:var(--mono);display:inline-flex;align-items:center;justify-content:center;margin-top:1px}
++.card-title-block{flex:1;min-width:0}
++.card-title{font-size:12.5px;font-weight:700;color:var(--text);line-height:1.35;display:-webkit-box;
++  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
++.card-purpose{font-size:10.5px;color:var(--text3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
++.risk-badge{flex-shrink:0;font-size:9px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border-radius:20px;
++  text-transform:uppercase;margin-top:1px;display:inline-block}
++.risk-None{background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25)}
++.risk-Low{background:rgba(251,191,36,.1);color:var(--yellow);border:1px solid rgba(251,191,36,.25)}
++.risk-Medium{background:rgba(251,146,60,.1);color:var(--orange);border:1px solid rgba(251,146,60,.25)}
++.risk-High{background:rgba(248,113,113,.1);color:var(--red);border:1px solid rgba(248,113,113,.25)}
++.card-code-wrap{padding:8px 12px 0 15px;flex-shrink:0}
++.card-code{background:var(--bg);border:1px solid var(--border2);border-radius:6px;padding:7px 9px;
++  font-family:var(--mono);font-size:10.5px;color:var(--cyan);height:62px;overflow:hidden;line-height:1.55;
++  white-space:pre-wrap;word-break:break-all;position:relative}
++.card-code::after{content:'';position:absolute;bottom:0;left:0;right:0;height:16px;
++  background:linear-gradient(transparent,var(--bg));pointer-events:none}
++.card-notes{margin:5px 12px 0 15px;flex-shrink:0;font-size:9.5px;color:var(--orange);
++  background:rgba(251,146,60,.07);border:1px solid rgba(251,146,60,.15);border-radius:4px;padding:2px 7px;
++  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
++.card-notes-empty{margin:5px 0 0;flex-shrink:0;height:17px}
++.card-spacer{flex:1}
++.card-meta{padding:0 12px 0 15px;flex-shrink:0;display:flex;align-items:center;gap:6px}
++.card-usage{font-size:9px;color:var(--text3);font-family:var(--mono);background:var(--border);padding:1px 6px;border-radius:4px}
++.card-cat-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--accent,var(--blue))}
++.card-cat-name{font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
++[class*="st-key-card_"] [data-testid="stHorizontalBlock"]{padding:7px 10px 10px 15px;gap:5px!important;
++  flex-wrap:nowrap!important;flex-shrink:0}
++[class*="st-key-card_"] [data-testid="stColumn"]{min-width:0!important;flex:1 1 0!important;width:auto!important}
++[class*="st-key-card_"] .stButton button{padding:5px 0;font-size:10.5px;font-weight:700;border-radius:6px;
++  background:transparent;color:var(--text3);min-height:0;height:26px;border-color:var(--border2)}
++[class*="st-key-card_"] .stButton button p{font-size:10.5px;white-space:nowrap}
++[class*="st-key-copy_"] button:hover{color:var(--green)!important;border-color:var(--green)!important;background:rgba(52,211,153,.07)!important}
++[class*="st-key-view_"] button:hover{color:var(--cyan)!important;border-color:var(--cyan)!important;background:rgba(34,211,238,.07)!important}
++[class*="st-key-edit_"] button:hover{color:var(--yellow)!important;border-color:var(--yellow)!important;background:rgba(251,191,36,.07)!important}
++[class*="st-key-del_"] button:hover{color:var(--red)!important;border-color:var(--red)!important;background:rgba(248,113,113,.07)!important}
++.pager-info{text-align:center;color:var(--text3);font-size:11px;font-family:var(--mono)}
++.st-key-js_mount{position:absolute;height:0;overflow:hidden;opacity:0;pointer-events:none}
++
++/* ══ DIALOGS ══ */
++[data-testid="stDialog"]{background:rgba(0,0,0,.75)!important;backdrop-filter:blur(6px)}
++[data-testid="stDialog"] [role="dialog"]{background:var(--panel);border:1px solid var(--border2);
++  border-radius:var(--r14);box-shadow:var(--shadow)}
++[data-testid="stDialog"] h2{font-size:15px;font-weight:800;color:var(--text)}
++[data-testid="stDialog"] [data-testid="stForm"]{border:none;padding:0;background:transparent}
++.pv-title{font-size:15px;font-weight:800;color:var(--text);display:flex;align-items:center;gap:8px}
++.pv-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
++.pv-item{background:var(--card);border-radius:var(--r8);padding:9px 12px}
++.pv-label{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin-bottom:3px}
++.pv-value{font-size:12.5px;font-weight:600;color:var(--text)}
++.pv-full{grid-column:1/-1}
++.pv-notes-value{color:var(--orange)!important;font-size:12px}
++[data-testid="stCode"],[data-testid="stCode"] pre{background:var(--bg)!important;border:1px solid var(--border2);border-radius:var(--r10)}
++code,[data-testid="stCode"] *{font-family:var(--mono)!important;color:var(--cyan)}
++[data-testid="stCode"] pre{white-space:pre-wrap!important;word-break:break-all;font-size:12.5px;line-height:1.65}
++
++/* ══ ADMIN PAGE ══ */
++[data-testid="stMetric"]{background:var(--card);border:1px solid var(--border);border-radius:var(--r10);padding:.65rem .8rem}
++[data-testid="stMetricLabel"] p{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text3)}
++[data-testid="stMetricValue"]{font-weight:700}
++[data-baseweb="tab-list"],[role="tablist"]{gap:4px;border-bottom:1px solid var(--border)}
++[data-baseweb="tab"],[role="tab"]{font-size:12px;font-weight:600;color:var(--text3);background:transparent}
++[role="tab"][aria-selected="true"]{color:var(--blue)}
++[data-baseweb="tab-highlight"]{background:var(--blue)}
++[data-testid="stForm"]{background:var(--card);border:1px solid var(--border);border-radius:var(--r10)}
++[data-testid="stAlert"]{border-radius:var(--r10)}
++
++/* ══ TOASTS ══ */
++[data-testid="stToast"]{background:var(--panel);border:1px solid var(--border2);border-radius:var(--r10);box-shadow:var(--shadow);color:var(--text)}
++#ps-toast{position:fixed;bottom:22px;right:22px;background:var(--panel);border:1px solid var(--border2);color:var(--text);
++  padding:10px 16px;border-radius:var(--r10);font:600 12.5px var(--sans);box-shadow:var(--shadow);
++  transform:translateY(70px);opacity:0;transition:all .3s ease;z-index:9999;pointer-events:none}
++#ps-toast.show{transform:translateY(0);opacity:1}
++#ps-toast.ok{border-color:rgba(52,211,153,.5)}
++#ps-toast.err{border-color:rgba(248,113,113,.5);color:var(--red)}
++
++/* ══ RESPONSIVE ══ */
++@media (max-width:1000px){
++  [data-testid="stSidebar"]{min-width:200px!important;max-width:200px!important;width:200px!important}
++  .st-key-sticky_head [data-testid="stHorizontalBlock"]{flex-wrap:wrap}
++  .st-key-sticky_head [data-testid="stHorizontalBlock"]>[data-testid="stColumn"]{min-width:calc(50% - 6px)!important}
++  .st-key-sticky_head [data-testid="stHorizontalBlock"]>[data-testid="stColumn"]:first-child{min-width:100%!important}
++  .st-key-grid{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
++}
++@media (max-width:640px){
++  [data-testid="stMainBlockContainer"],.stMainBlockContainer{padding:3.2rem .6rem 1.5rem!important}
++  [data-testid="stLayoutWrapper"]:has(>.st-key-sticky_head){position:static;margin:0}
++  .st-key-grid{grid-template-columns:1fr}
++  .pv-grid{grid-template-columns:1fr}
++  .stButton button{min-height:2.5rem}
++}
+diff --git a/requirements.txt b/requirements.txt
+index a1b951c..9b17e96 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,3 @@
+-streamlit>=1.40,<2
++streamlit>=1.50,<2
+ pandas>=2.2,<3
+ supabase
+diff --git a/services/repo_sqlite.py b/services/repo_sqlite.py
+index 13bb1bf..feb2189 100644
+--- a/services/repo_sqlite.py
++++ b/services/repo_sqlite.py
+@@ -1,10 +1,13 @@
+ import os
+ import sqlite3
+ import json
++from pathlib import Path
+ from typing import Any
+ 
+-# Match your specific container volume pathway exactly
+-DB_PATH = "/app/database/ps_toolkit.db"
++# Resolves to /app/database/ps_toolkit.db inside the container (same as before),
++# but also works for local runs. Override with PS_TOOLKIT_DB_PATH if needed.
++_DEFAULT_DB = Path(__file__).resolve().parents[1] / "database" / "ps_toolkit.db"
++DB_PATH = os.getenv("PS_TOOLKIT_DB_PATH", str(_DEFAULT_DB))
+ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+ 
+ RISK_LEVELS = ["None", "Low", "Medium", "High"]
+diff --git a/tests/test_ui.py b/tests/test_ui.py
+new file mode 100644
+index 0000000..afcd8d4
+--- /dev/null
++++ b/tests/test_ui.py
+@@ -0,0 +1,30 @@
++from ui.theme import safe_color, build_css
++from ui.components import e, multiline, risk_class, _card_html
++
++
++def test_safe_color_accepts_only_hex():
++    assert safe_color('#3B82F6') == '#3b82f6'
++    assert safe_color('red;} body{display:none') == '#3b82f6'
++    assert safe_color(None) == '#3b82f6'
++
++
++def test_css_generation_never_emits_unsafe_values():
++    css = build_css([{'id': 3, 'color': 'url(javascript:alert(1))'}, {'id': 4, 'color': '#a78bfa'}])
++    assert 'javascript' not in css
++    assert 'st-key-card_c4_' in css and '--accent:#a78bfa' in css
++
++
++def test_html_is_escaped():
++    assert '<script>' not in e('<script>alert(1)</script>')
++    assert '\n' not in multiline('a\nb') and '&#10;' in multiline('a\nb')
++
++
++def test_risk_class_whitelist():
++    assert risk_class('High') == 'risk-High'
++    assert risk_class('x" onmouseover="evil') == 'risk-None'
++
++
++def test_card_html_escapes_command_and_notes():
++    html = _card_html({'title': '<b>t</b>', 'command_text': '"$_" <img src=x onerror=1>', 'notes': '<i>n</i>',
++                       'risk_level': 'High', 'usage_type': 'Admin', 'category': 'Net'}, 1)
++    assert '<img' not in html and '<b>t' not in html and '<i>n' not in html
+diff --git a/ui/__init__.py b/ui/__init__.py
+new file mode 100644
+index 0000000..4b0ecb9
+--- /dev/null
++++ b/ui/__init__.py
+@@ -0,0 +1 @@
++"""Presentation layer for the PowerShell Master Toolkit (Streamlit)."""
+diff --git a/ui/admin.py b/ui/admin.py
+new file mode 100644
+index 0000000..5fa4f36
+--- /dev/null
++++ b/ui/admin.py
+@@ -0,0 +1,116 @@
++"""Administration route (sign-in, command/category management, import/export, audit & health).
++Behaviour is unchanged from the previous app.py; only presentation and notifications differ."""
++from __future__ import annotations
++from datetime import date
++import pandas as pd
++import streamlit as st
++
++from services import auth, repository as repo
++from ui.dialogs import add_dialog, edit_dialog, flash
++
++
++def _back(label: str, key: str) -> None:
++    if st.button(label, key=key):
++        st.session_state.route = 'Library'
++        st.rerun()
++
++
++def render_admin(categories: list[dict]) -> None:
++    st.title('Administration')
++    if not auth.is_admin():
++        st.info('Administrator authentication is required to add, edit or import commands.')
++        if not auth.configured():
++            st.error('Admin authentication is not configured. Set auth.admin_password_hash in '
++                     '.streamlit/secrets.toml or PS_TOOLKIT_ADMIN_PASSWORD_HASH.')
++        with st.form('admin_login'):
++            password = st.text_input('Administrator password', type='password')
++            if st.form_submit_button('Sign In', type='primary', width='stretch'):
++                if auth.login(password):
++                    flash('Access granted', '🔓')
++                    st.rerun()
++                else:
++                    st.error('Invalid administrator credentials.')
++        _back('← Return to Library', 'admin_back_login')
++        st.stop()
++
++    h = repo.health()
++    for col, (label, value) in zip(st.columns(4), [('Commands', h['commands']), ('Categories', h['categories']),
++                                                   ('Integrity', h['integrity']), ('Schema', h['schema_version'])]):
++        col.metric(label, value)
++
++    manage, transfer, audit = st.tabs(['Command Management', 'Import / Export', 'Audit & Health'])
++
++    with manage:
++        st.caption('Administrators can add and edit commands. Command deletion is intentionally disabled.')
++        if st.button('＋ Add New Command', type='primary', key='admin_add'):
++            add_dialog()
++
++        search = st.text_input('Find command to edit', placeholder='Search by title or command')
++        rows, _total = repo.list_commands(search=search, page_size=20)
++        for command in rows:
++            a, b = st.columns([5, 1])
++            a.write(f"**{command['title']}** · {command['category']}")
++            if b.button('Edit', key=f"admin_edit_{command['id']}", width='stretch'):
++                edit_dialog(command['id'])
++
++        st.divider()
++        st.subheader('📁 Manage Categories')
++        cat_action = st.radio('Choose Action', ['Add New Category', 'Edit Existing Category'], horizontal=True)
++
++        if cat_action == 'Add New Category':
++            with st.form('add_category_form'):
++                new_name = st.text_input('Category Name', placeholder='e.g., Active Directory')
++                new_icon = st.text_input('Emoji Icon', placeholder='e.g., 🔑')
++                new_color = st.color_picker('Category Color Theme', '#3b82f6')
++                if st.form_submit_button('Create Category', type='primary', width='stretch'):
++                    if new_name.strip():
++                        try:
++                            repo.save_category({'name': new_name, 'icon': new_icon, 'color': new_color})
++                            flash(f"Category '{new_name}' created")
++                            st.rerun()
++                        except Exception as error:
++                            st.error(f'Error saving category: {error}')
++                    else:
++                        st.warning('Category name field cannot be blank.')
++        else:
++            cat_options = {c['name']: c for c in categories}
++            if cat_options:
++                selected_name = st.selectbox('Select Category to Modify', list(cat_options))
++                target = cat_options[selected_name]
++                with st.form('edit_category_form'):
++                    edit_name = st.text_input('Category Name', value=target['name'])
++                    edit_icon = st.text_input('Emoji Icon', value=target.get('icon') or '📁')
++                    color = target.get('color') if str(target.get('color')).startswith('#') else '#3b82f6'
++                    edit_color = st.color_picker('Category Color Theme', value=color)
++                    if st.form_submit_button('Save Category Changes', type='primary', width='stretch'):
++                        try:
++                            repo.save_category({'name': edit_name, 'icon': edit_icon, 'color': edit_color},
++                                               category_id=target['id'])
++                            flash('Category updated')
++                            st.rerun()
++                        except Exception as error:
++                            st.error(f'Error: {error}')
++            else:
++                st.info('No active categories found to modify.')
++
++    with transfer:
++        uploaded = st.file_uploader('Import JSON', type=['json'])
++        if uploaded and st.button('Import Commands', type='primary', key='admin_import'):
++            try:
++                added, skipped = repo.import_json(uploaded.getvalue())
++                flash(f'Imported {added}; skipped {skipped}', '📥')
++                st.rerun()
++            except Exception as error:
++                st.error(str(error))
++        st.download_button('Export Current Commands', repo.export_json(), f'ps_toolkit_{date.today()}.json',
++                           'application/json', key='admin_export')
++
++    with audit:
++        if h['integrity'] == 'ok' and h['foreign_key_errors'] == 0:
++            st.success('Database integrity and foreign-key checks passed.')
++        else:
++            st.error(f"Integrity: {h['integrity']}; foreign-key issues: {h['foreign_key_errors']}")
++        st.dataframe(pd.DataFrame(repo.audit_logs()), width='stretch', hide_index=True)
++
++    _back('← Return to Command Library', 'admin_back')
++    st.stop()
+diff --git a/ui/components.py b/ui/components.py
+new file mode 100644
+index 0000000..f53eca2
+--- /dev/null
++++ b/ui/components.py
+@@ -0,0 +1,219 @@
++"""Reusable UI pieces. All user/DB-supplied text is HTML-escaped before it reaches st.html."""
++from __future__ import annotations
++from html import escape
++import streamlit as st
++import streamlit.components.v1 as components
++
++from services import auth, repository as repo
++from ui.theme import safe_color
++
++RISK_LABELS = {'All Risks': 'All Risks', 'None': '✅ None', 'Low': '🟡 Low', 'Medium': '🟠 Medium', 'High': '🔴 High'}
++USAGE_LABELS = {'All Usage': 'All Usage', 'User': '👤 User', 'Admin': '🛡 Admin', 'User/Admin': '🔑 Both'}
++_RISK_CLASSES = {'None', 'Low', 'Medium', 'High'}
++
++
++def e(value) -> str:
++    return escape(str(value if value is not None else ''), quote=True)
++
++
++def multiline(value) -> str:
++    """Escape and keep newlines/indentation (white-space: pre-wrap) without breaking the HTML."""
++    return e(value).replace('\r\n', '\n').replace('\r', '\n').replace('\n', '&#10;')
++
++
++def risk_class(risk) -> str:
++    return f'risk-{risk}' if risk in _RISK_CLASSES else 'risk-None'
++
++
++# ───────────────────────── sidebar ─────────────────────────
++def render_sidebar(summary: dict, categories: list[dict]) -> None:
++    with st.sidebar:
++        st.html(
++            '<div class="s-logo"><h1>⚡ PS Toolkit</h1>'
++            f'<p>{int(summary["total"])} Commands · {int(summary["categories"])} Categories</p></div>'
++        )
++        with st.container(key='side_nav'):
++            st.html('<span class="s-nav-label">Library</span>')
++            if st.button(f"📋  All Commands  ·  {summary['total']}", key='cat_all', width='stretch',
++                         type='primary' if st.session_state.active_category is None else 'secondary'):
++                _go_category(None)
++            st.html('<span class="s-nav-label">Categories</span>')
++            for item in categories:
++                icon = item.get('icon') or '📁'
++                active = st.session_state.active_category == item['id']
++                if st.button(f"{icon}  {item['name']}  ·  {item['command_count']}", key=f"cat_{item['id']}",
++                             width='stretch', type='primary' if active else 'secondary'):
++                    _go_category(item['id'])
++
++        with st.container(key='side_footer'):
++            a, b = st.columns(2, gap='small')
++            if a.button('↑ Import', key='nav_import', width='stretch',
++                        help='Open Administration → Import / Export (administrator sign-in required)'):
++                st.session_state.route = 'Administration'
++                st.rerun()
++            b.download_button('↓ Export', repo.export_json(), f'ps_toolkit_{_today()}.json', 'application/json',
++                              width='stretch', key='nav_export', type='primary')
++            if auth.is_admin():
++                c, d = st.columns(2, gap='small')
++                if c.button('⚙ Admin', key='nav_admin', width='stretch'):
++                    st.session_state.route = 'Administration'
++                    st.rerun()
++                if d.button('Sign Out', key='nav_signout', width='stretch'):
++                    auth.logout()
++                    st.rerun()
++                st.html('<div class="s-role">● Signed in as <b>Admin</b></div>')
++            else:
++                if st.button('🔐 Administrator Sign-in', key='nav_signin', width='stretch'):
++                    st.session_state.route = 'Administration'
++                    st.rerun()
++                st.html('<div class="s-role">○ Read-only <b>User</b></div>')
++
++
++def _today() -> str:
++    from datetime import date
++    return str(date.today())
++
++
++def _go_category(category_id) -> None:
++    st.session_state.active_category = category_id
++    st.session_state.page = 1
++    st.session_state.route = 'Library'
++    st.rerun()
++
++
++# ───────────────────────── toolbar & stats ─────────────────────────
++def render_toolbar(on_filter_change, on_reset, on_add) -> tuple[str, str, str]:
++    c_search, c_risk, c_usage, c_add, c_reset = st.columns([5, 1.45, 1.45, 1, 1], gap='small', vertical_alignment='center')
++    search = c_search.text_input('Search', placeholder='Search commands, titles, purpose, category...', key='search',
++                                 label_visibility='collapsed', on_change=on_filter_change)
++    risk_choice = c_risk.selectbox('Risk', list(RISK_LABELS), key='risk', label_visibility='collapsed',
++                                   format_func=RISK_LABELS.get, on_change=on_filter_change)
++    usage_choice = c_usage.selectbox('Usage', list(USAGE_LABELS), key='usage', label_visibility='collapsed',
++                                     format_func=USAGE_LABELS.get, on_change=on_filter_change)
++    admin = auth.is_admin()
++    if c_add.button('＋ Add', key='btn_add', type='primary', width='stretch', disabled=not admin,
++                    help='Add a new command' if admin else 'Administrator sign-in required'):
++        on_add()
++    c_reset.button('↺ Reset', key='btn_reset', width='stretch', on_click=on_reset,
++                   help='Clear search, filters and category selection (data is not changed)')
++    return search, ('' if risk_choice == 'All Risks' else risk_choice), ('' if usage_choice == 'All Usage' else usage_choice)
++
++
++def render_stats(summary: dict, showing: int) -> None:
++    items = [('📋', 'Total', summary['total']), ('📂', 'Categories', summary['categories']), ('🔍', 'Showing', showing),
++             ('🔴', 'High Risk', summary['high']), ('🟠', 'Medium Risk', summary['medium']), ('🛡', 'Admin Only', summary['admin'])]
++    cells = ''.join(f'<div class="stat">{icon} {label} <b>{int(value)}</b></div>' for icon, label, value in items)
++    st.html(f'<div class="statsbar">{cells}</div>')
++
++
++# ───────────────────────── grid pieces ─────────────────────────
++def section_header(name: str, icon: str, color: str, shown: int) -> None:
++    st.html(
++        f'<div class="sec-hdr"><h3 style="color:{safe_color(color)}">{e(icon)} {e(name)}</h3>'
++        f'<div class="sec-hdr-line"></div><span class="sec-hdr-count">{int(shown)} shown</span></div>'
++    )
++
++
++def empty_state() -> None:
++    st.html(
++        '<div class="empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
++        'stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>'
++        '<span>No commands match your filters.</span></div>'
++    )
++
++
++def _card_html(cmd: dict, seq: int) -> str:
++    notes = (cmd.get('notes') or '').strip()
++    notes_html = (f'<div class="card-notes" title="{e(notes)}">⚠ {e(notes)}</div>' if notes
++                  else '<div class="card-notes-empty"></div>')
++    return (
++        '<div class="cmd-body">'
++        '<div class="card-top"><div class="card-head-row">'
++        f'<div class="card-id">{seq:02d}</div>'
++        '<div class="card-title-block">'
++        f'<div class="card-title">{e(cmd.get("title"))}</div>'
++        f'<div class="card-purpose">{e(cmd.get("purpose") or "No purpose specified")}</div></div>'
++        f'<span class="risk-badge {risk_class(cmd.get("risk_level"))}">{e(cmd.get("risk_level"))}</span>'
++        '</div></div>'
++        f'<div class="card-code-wrap"><div class="card-code">{multiline(cmd.get("command_text"))}</div></div>'
++        f'{notes_html}<div class="card-spacer"></div>'
++        '<div class="card-meta">'
++        f'<span class="card-usage">{e(cmd.get("usage_type"))}</span>'
++        '<span class="card-cat-dot"></span>'
++        f'<span class="card-cat-name">{e(cmd.get("category"))}</span></div></div>'
++    )
++
++
++def command_card(cmd: dict, on_view, on_edit) -> None:
++    cid = cmd['id']
++    seq = int(cmd.get('category_sequence', 1))
++    admin = auth.is_admin()
++    with st.container(key=f"card_c{int(cmd.get('category_id') or 0)}_{cid}"):
++        st.html(_card_html(cmd, seq))
++        a, b, c, d = st.columns(4, gap='small')
++        # Copy is handled client-side (see copy_script); the button itself needs no server logic.
++        a.button('📋 Copy', key=f'copy_{cid}', width='stretch', help='Copy command to clipboard')
++        if b.button('👁 View', key=f'view_{cid}', width='stretch', help='View full details'):
++            on_view(cid)
++        if c.button('✏️ Edit', key=f'edit_{cid}', width='stretch', disabled=not admin,
++                    help='Edit command' if admin else 'Administrator sign-in required'):
++            on_edit(cid)
++        d.button('🗑 Delete', key=f'del_{cid}', width='stretch', disabled=True,
++                 help='Deletion is intentionally disabled in this deployment')
++
++
++def render_pager(total: int, pages: int, page_sizes: list[int], on_size_change) -> None:
++    prev_c, info_c, size_c, next_c = st.columns([1, 3, 1.2, 1], gap='small', vertical_alignment='center')
++    if prev_c.button('← Previous', key='pg_prev', disabled=st.session_state.page <= 1, width='stretch'):
++        st.session_state.page -= 1
++        st.rerun()
++    info_c.html(f'<div class="pager-info">Page {st.session_state.page} of {pages} · {total} matching commands</div>')
++    size_c.selectbox('Page size', page_sizes, key='page_size', label_visibility='collapsed',
++                     format_func=lambda n: f'{n} / page', on_change=on_size_change)
++    if next_c.button('Next →', key='pg_next', disabled=st.session_state.page >= pages, width='stretch'):
++        st.session_state.page += 1
++        st.rerun()
++
++
++# ───────────────────────── client-side copy ─────────────────────────
++_COPY_JS = """
++<script>
++(function () {
++  var P = window.parent, D = P.document;
++  if (P.__psCopyBound) return;
++  P.__psCopyBound = true;
++  function toast(msg, ok) {
++    var t = D.getElementById('ps-toast');
++    if (!t) { t = D.createElement('div'); t.id = 'ps-toast'; D.body.appendChild(t); }
++    t.textContent = msg; t.className = 'show ' + (ok ? 'ok' : 'err');
++    P.clearTimeout(P.__psToastT);
++    P.__psToastT = P.setTimeout(function () { t.className = ''; }, 2200);
++  }
++  function fallback(text) {
++    var ta = D.createElement('textarea');
++    ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
++    D.body.appendChild(ta); ta.select();
++    var ok = false; try { ok = D.execCommand('copy'); } catch (_) {}
++    ta.remove(); return ok;
++  }
++  D.addEventListener('click', function (ev) {
++    var btn = ev.target.closest('[class*="st-key-copy_"] button');
++    if (!btn) return;
++    ev.stopImmediatePropagation(); ev.preventDefault();   // no Streamlit rerun for a pure clipboard action
++    var card = btn.closest('[class*="st-key-card_"]');
++    var code = card && card.querySelector('.card-code');
++    if (!code) { toast('Nothing to copy', false); return; }
++    var text = code.textContent;
++    var done = function (ok) { toast(ok ? '✓ Command copied to clipboard' : 'Copy failed — use View and copy from there', ok); };
++    if (P.navigator.clipboard && P.isSecureContext) {
++      P.navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(fallback(text)); });
++    } else { done(fallback(text)); }
++  }, true);
++})();
++</script>
++"""
++
++
++def copy_script() -> None:
++    with st.container(key='js_mount'):
++        components.html(_COPY_JS, height=0)
+diff --git a/ui/dialogs.py b/ui/dialogs.py
+new file mode 100644
+index 0000000..8e7224b
+--- /dev/null
++++ b/ui/dialogs.py
+@@ -0,0 +1,99 @@
++"""Add / Edit / Preview dialogs (st.dialog)."""
++from __future__ import annotations
++import streamlit as st
++
++from services import auth, repository as repo
++from ui.components import e, multiline, risk_class
++
++
++def flash(message: str, icon: str = '✅') -> None:
++    """Queue a toast that survives the st.rerun() that follows a successful action."""
++    st.session_state['flash'] = (message, icon)
++
++
++def command_form(command=None) -> None:
++    if not auth.is_admin():
++        st.error('Administrator permission is required.')
++        return
++    cats = repo.categories()
++    names = [x['name'] for x in cats]
++    ids = {x['name']: x['id'] for x in cats}
++    icons = {x['name']: (x.get('icon') or '📁') for x in cats}
++    selected = names.index(command['category']) if command and command['category'] in names else 0
++
++    with st.form(f"command_{command['id'] if command else 'new'}", border=False):
++        a, b = st.columns(2)
++        a.text_input('Command ID', value=str(command['id']) if command else '', placeholder='Auto-assigned',
++                     disabled=True, help='IDs are assigned by the database and cannot be edited.')
++        category = b.selectbox('Category', names, index=selected, format_func=lambda n: f'{icons[n]}  {n}')
++        title = st.text_input('Title *', value=command['title'] if command else '', placeholder='e.g. High CPU Processes')
++        text = st.text_area('PowerShell Command *', value=command['command_text'] if command else '', height=150,
++                            placeholder='Get-Process | Sort CPU -Desc | Select -First 10')
++        a, b = st.columns(2)
++        purpose = a.text_input('Purpose', value=command['purpose'] if command else '', placeholder='What it does')
++        expected = b.text_input('Expected Result', value=command['expected_result'] if command else '',
++                                placeholder='What you see')
++        a, b = st.columns(2)
++        risk = a.selectbox('Risk Level', repo.RISK_LEVELS,
++                           index=repo.RISK_LEVELS.index(command['risk_level']) if command and command['risk_level'] in repo.RISK_LEVELS else 0)
++        usage = b.selectbox('Usage', repo.USAGE_TYPES,
++                            index=repo.USAGE_TYPES.index(command['usage_type']) if command and command['usage_type'] in repo.USAGE_TYPES else 2)
++        notes = st.text_input('Notes / Cautions (optional)', value=command['notes'] if command else '',
++                              placeholder='Warnings, prerequisites, tips...')
++        if st.form_submit_button('Save Command', type='primary', width='stretch'):
++            if not title.strip() or not text.strip():
++                st.error('Title and PowerShell Command are required.')
++                return
++            try:
++                repo.save_command({
++                    'category_id': ids[category], 'title': title, 'command_text': text,
++                    'purpose': purpose, 'expected_result': expected, 'risk_level': risk,
++                    'usage_type': usage, 'notes': notes,
++                }, command_id=command['id'] if command else None)
++                flash('Command updated' if command else 'Command added')
++                st.rerun()
++            except Exception as error:
++                st.error(str(error))
++
++
++@st.dialog('Add Command', width='large')
++def add_dialog():
++    command_form()
++
++
++@st.dialog('Edit Command', width='large')
++def edit_dialog(command_id):
++    command = repo.get_command(command_id)
++    if command:
++        command_form(command)
++    else:
++        st.error('Command not found.')
++
++
++@st.dialog('Command Preview', width='large')
++def preview_dialog(command_id):
++    command = repo.get_command(command_id)
++    if not command:
++        st.error('Command not found.')
++        return
++    st.html(f'<div class="pv-title"><span class="card-id">#{int(command["id"])}</span> {e(command["title"])}</div>')
++    st.code(command['command_text'], language='powershell')   # built-in copy button
++
++    def item(label, value, cls='', full=False):
++        return (f'<div class="pv-item{" pv-full" if full else ""}"><div class="pv-label">{label}</div>'
++                f'<div class="pv-value {cls}">{value}</div></div>')
++
++    blocks = [
++        item('Purpose', e(command['purpose']) or '—'),
++        item('Expected Result', e(command['expected_result']) or '—'),
++        item('Risk Level', f'<span class="risk-badge {risk_class(command["risk_level"])}">{e(command["risk_level"])}</span>'),
++        item('Usage', e(command['usage_type'])),
++        item('Category', e(command['category']), full=True),
++    ]
++    if command.get('notes'):
++        blocks.append(item('⚠️ Notes / Caution', e(command['notes']), 'pv-notes-value', full=True))
++    st.html(f'<div class="pv-grid">{"".join(blocks)}</div>')
++
++    if auth.is_admin() and st.button('✏️ Edit This Command', key=f'pv_edit_{command_id}', type='primary', width='stretch'):
++        st.session_state.pending_edit = command_id
++        st.rerun()
+diff --git a/ui/theme.py b/ui/theme.py
+new file mode 100644
+index 0000000..5738f11
+--- /dev/null
++++ b/ui/theme.py
+@@ -0,0 +1,24 @@
++"""Design-token CSS loading. Static tokens live in assets/theme.css;
++only per-category accent colours are generated here."""
++from __future__ import annotations
++import re
++from pathlib import Path
++
++ASSETS = Path(__file__).resolve().parents[1] / 'assets'
++DEFAULT_ACCENT = '#3b82f6'
++_HEX = re.compile(r'^#[0-9a-fA-F]{6}$')
++
++
++def safe_color(value, fallback: str = DEFAULT_ACCENT) -> str:
++    """Only ever emit a strict #rrggbb value into CSS/HTML (prevents style injection)."""
++    v = str(value or '').strip()
++    return v.lower() if _HEX.match(v) else fallback
++
++
++def build_css(categories: list[dict]) -> str:
++    base = (ASSETS / 'theme.css').read_text(encoding='utf-8')
++    rules = '\n'.join(
++        f'[class*="st-key-card_c{int(c["id"])}_"]{{--accent:{safe_color(c.get("color"))}}}'
++        for c in categories
++    )
++    return f'<style>{base}\n{rules}</style>'

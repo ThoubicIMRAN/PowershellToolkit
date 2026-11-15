@@ -12,7 +12,15 @@ from ui.dialogs import add_dialog, edit_dialog, preview_dialog  # noqa: E402
 from ui.theme import build_css                    # noqa: E402
 
 PAGE_SIZES = [12, 24, 48, 96]
-for key, value in {'role': 'User', 'route': 'Library', 'active_category': None, 'page': 1, 'page_size': 24}.items():
+for key, value in {
+    'role': 'User',
+    'route': 'Library',
+    'active_category': None,
+    'page': 1,
+    'page_size': 24,
+    'platform': 'All',
+    'scope': 'All Scopes',
+}.items():
     st.session_state.setdefault(key, value)
 
 
@@ -24,6 +32,8 @@ def reset_filters() -> None:
     st.session_state.search = ''
     st.session_state.risk = 'All Risks'
     st.session_state.usage = 'All Usage'
+    st.session_state.platform = 'All'
+    st.session_state.scope = 'All Scopes'
     st.session_state.active_category = None
     st.session_state.page = 1
 
@@ -36,7 +46,11 @@ if st.session_state.get('flash'):
     message, icon = st.session_state.pop('flash')
     st.toast(message, icon=icon)
 
-ui.render_sidebar(summary, categories)
+# Resolve active platform / scope filters for the data layer
+platform_filter = '' if st.session_state.platform == 'All' else st.session_state.platform
+scope_filter = '' if st.session_state.scope == 'All Scopes' else st.session_state.scope
+
+ui.render_sidebar(summary, categories, platform_filter, scope_filter)
 
 if st.session_state.get('pending_edit'):
     edit_dialog(st.session_state.pop('pending_edit'))
@@ -46,10 +60,22 @@ if st.session_state.route == 'Administration':
 
 # ── Library ──────────────────────────────────────────────
 with st.container(key='sticky_head'):
-    search, risk, usage = ui.render_toolbar(reset_page, reset_filters, add_dialog)
+    # Platform selector (horizontal)
+    ui.render_platform_selector(reset_page)
+
+    search, risk, usage, scope = ui.render_toolbar(reset_page, reset_filters, add_dialog)
     page_size = st.session_state.page_size
-    rows, total = repo.list_commands(search, st.session_state.active_category, risk, usage,
-                                     st.session_state.page, page_size)
+
+    rows, total = repo.list_commands(
+        search,
+        st.session_state.active_category,
+        risk,
+        usage,
+        platform=platform_filter,
+        scope=scope_filter,
+        page=st.session_state.page,
+        page_size=page_size,
+    )
     pages = max(1, math.ceil(total / page_size))
     ui.render_stats(summary, total)
 

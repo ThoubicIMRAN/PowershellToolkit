@@ -9,7 +9,34 @@ from ui.theme import safe_color
 
 RISK_LABELS = {'All Risks': 'All Risks', 'None': '✅ None', 'Low': '🟡 Low', 'Medium': '🟠 Medium', 'High': '🔴 High'}
 USAGE_LABELS = {'All Usage': 'All Usage', 'User': '👤 User', 'Admin': '🛡 Admin', 'User/Admin': '🔑 Both'}
+SCOPE_LABELS = {
+    'All Scopes': 'All Scopes',
+    'Client / Desktop': '🖥 Client / Desktop',
+    'Server / Infra': '🖧 Server / Infra',
+    'Cloud / SaaS': '☁ Cloud / SaaS',
+    'CLI / DevOps': '⌨ CLI / DevOps',
+}
 _RISK_CLASSES = {'None', 'Low', 'Medium', 'High'}
+
+PLATFORM_OPTIONS = ['All'] + list(getattr(repo, 'PLATFORMS', [
+    'Windows', 'Linux', 'Microsoft 365', 'GitHub', 'Cross-Platform',
+]))
+
+# Color map for platform badges
+_PLATFORM_COLORS = {
+    'Windows':       ('#3b82f6', 'rgba(59,130,246,.12)'),
+    'Linux':         ('#fbbf24', 'rgba(251,191,36,.12)'),
+    'Microsoft 365': ('#a78bfa', 'rgba(167,139,250,.12)'),
+    'GitHub':        ('#94a3b8', 'rgba(148,163,184,.12)'),
+    'Cross-Platform':('#22d3ee', 'rgba(34,211,238,.12)'),
+}
+
+_SCOPE_COLORS = {
+    'Client / Desktop': ('#34d399', 'rgba(52,211,153,.12)'),
+    'Server / Infra':   ('#fb923c', 'rgba(251,146,60,.12)'),
+    'Cloud / SaaS':     ('#a78bfa', 'rgba(167,139,250,.12)'),
+    'CLI / DevOps':     ('#22d3ee', 'rgba(34,211,238,.12)'),
+}
 
 
 def e(value) -> str:
@@ -26,7 +53,8 @@ def risk_class(risk) -> str:
 
 
 # ───────────────────────── sidebar ─────────────────────────
-def render_sidebar(summary: dict, categories: list[dict]) -> None:
+def render_sidebar(summary: dict, categories: list[dict],
+                   platform_filter: str = '', scope_filter: str = '') -> None:
     with st.sidebar:
         st.html(
             '<div class="s-logo"><h1>⚡ PS Toolkit</h1>'
@@ -39,9 +67,24 @@ def render_sidebar(summary: dict, categories: list[dict]) -> None:
                 _go_category(None)
             st.html('<span class="s-nav-label">Categories</span>')
             for item in categories:
+                # When platform/scope filters are active, only show categories that still have matches
+                if platform_filter or scope_filter:
+                    _, cat_total = repo.list_commands(
+                        category_id=item['id'],
+                        platform=platform_filter,
+                        scope=scope_filter,
+                        page=1,
+                        page_size=1,
+                    )
+                    if cat_total == 0:
+                        continue
+                    count = cat_total
+                else:
+                    count = item['command_count']
+
                 icon = item.get('icon') or '📁'
                 active = st.session_state.active_category == item['id']
-                if st.button(f"{icon}  {item['name']}  ·  {item['command_count']}", key=f"cat_{item['id']}",
+                if st.button(f"{icon}  {item['name']}  ·  {count}", key=f"cat_{item['id']}",
                              width='stretch', type='primary' if active else 'secondary'):
                     _go_category(item['id'])
 
@@ -81,28 +124,79 @@ def _go_category(category_id) -> None:
     st.rerun()
 
 
+# ───────────────────────── platform selector ─────────────────────────
+def render_platform_selector(on_change) -> None:
+    """Horizontal platform pills at the top of the library view."""
+    current = st.session_state.get('platform', 'All')
+    cols = st.columns(len(PLATFORM_OPTIONS), gap='small')
+    for i, plat in enumerate(PLATFORM_OPTIONS):
+        label = '🌐 All' if plat == 'All' else plat
+        is_active = current == plat
+        if cols[i].button(
+            label,
+            key=f'plat_{plat.replace(" ", "_").replace("/", "_")}',
+            width='stretch',
+            type='primary' if is_active else 'secondary',
+            help=f'Filter by {plat}' if plat != 'All' else 'Show all platforms',
+        ):
+            if st.session_state.platform != plat:
+                st.session_state.platform = plat
+                on_change()
+                st.rerun()
+
+
 # ───────────────────────── toolbar & stats ─────────────────────────
-def render_toolbar(on_filter_change, on_reset, on_add) -> tuple[str, str, str]:
-    c_search, c_risk, c_usage, c_add, c_reset = st.columns([5, 1.45, 1.45, 1, 1], gap='small', vertical_alignment='center')
-    search = c_search.text_input('Search', placeholder='Search commands, titles, purpose, category...', key='search',
-                                 label_visibility='collapsed', on_change=on_filter_change)
-    risk_choice = c_risk.selectbox('Risk', list(RISK_LABELS), key='risk', label_visibility='collapsed',
-                                   format_func=RISK_LABELS.get, on_change=on_filter_change)
-    usage_choice = c_usage.selectbox('Usage', list(USAGE_LABELS), key='usage', label_visibility='collapsed',
-                                     format_func=USAGE_LABELS.get, on_change=on_filter_change)
+def render_toolbar(on_filter_change, on_reset, on_add) -> tuple[str, str, str, str]:
+    c_search, c_risk, c_usage, c_scope, c_add, c_reset = st.columns(
+        [4.2, 1.3, 1.3, 1.6, 0.9, 0.9], gap='small', vertical_alignment='center'
+    )
+    search = c_search.text_input(
+        'Search', placeholder='Search commands, titles, purpose, category...', key='search',
+        label_visibility='collapsed', on_change=on_filter_change,
+    )
+    risk_choice = c_risk.selectbox(
+        'Risk', list(RISK_LABELS), key='risk', label_visibility='collapsed',
+        format_func=RISK_LABELS.get, on_change=on_filter_change,
+    )
+    usage_choice = c_usage.selectbox(
+        'Usage', list(USAGE_LABELS), key='usage', label_visibility='collapsed',
+        format_func=USAGE_LABELS.get, on_change=on_filter_change,
+    )
+    scope_choice = c_scope.selectbox(
+        'Scope', list(SCOPE_LABELS), key='scope', label_visibility='collapsed',
+        format_func=SCOPE_LABELS.get, on_change=on_filter_change,
+    )
     admin = auth.is_admin()
-    if c_add.button('＋ Add', key='btn_add', type='primary', width='stretch', disabled=not admin,
-                    help='Add a new command' if admin else 'Administrator sign-in required'):
+    if c_add.button(
+        '＋ Add', key='btn_add', type='primary', width='stretch', disabled=not admin,
+        help='Add a new command' if admin else 'Administrator sign-in required',
+    ):
         on_add()
-    c_reset.button('↺ Reset', key='btn_reset', width='stretch', on_click=on_reset,
-                   help='Clear search, filters and category selection (data is not changed)')
-    return search, ('' if risk_choice == 'All Risks' else risk_choice), ('' if usage_choice == 'All Usage' else usage_choice)
+    c_reset.button(
+        '↺ Reset', key='btn_reset', width='stretch', on_click=on_reset,
+        help='Clear search, filters and category selection (data is not changed)',
+    )
+    return (
+        search,
+        ('' if risk_choice == 'All Risks' else risk_choice),
+        ('' if usage_choice == 'All Usage' else usage_choice),
+        ('' if scope_choice == 'All Scopes' else scope_choice),
+    )
 
 
 def render_stats(summary: dict, showing: int) -> None:
-    items = [('📋', 'Total', summary['total']), ('📂', 'Categories', summary['categories']), ('🔍', 'Showing', showing),
-             ('🔴', 'High Risk', summary['high']), ('🟠', 'Medium Risk', summary['medium']), ('🛡', 'Admin Only', summary['admin'])]
-    cells = ''.join(f'<div class="stat">{icon} {label} <b>{int(value)}</b></div>' for icon, label, value in items)
+    items = [
+        ('📋', 'Total', summary['total']),
+        ('📂', 'Categories', summary['categories']),
+        ('🔍', 'Showing', showing),
+        ('🔴', 'High Risk', summary['high']),
+        ('🟠', 'Medium Risk', summary['medium']),
+        ('🛡', 'Admin Only', summary['admin']),
+    ]
+    cells = ''.join(
+        f'<div class="stat">{icon} {label} <b>{int(value)}</b></div>'
+        for icon, label, value in items
+    )
     st.html(f'<div class="statsbar">{cells}</div>')
 
 
@@ -122,10 +216,31 @@ def empty_state() -> None:
     )
 
 
+def _badge(text: str, fg: str, bg: str) -> str:
+    return (
+        f'<span class="meta-badge" style="color:{fg};background:{bg};border:1px solid {fg}33">'
+        f'{e(text)}</span>'
+    )
+
+
 def _card_html(cmd: dict, seq: int) -> str:
     notes = (cmd.get('notes') or '').strip()
-    notes_html = (f'<div class="card-notes" title="{e(notes)}">⚠ {e(notes)}</div>' if notes
-                  else '<div class="card-notes-empty"></div>')
+    notes_html = (
+        f'<div class="card-notes" title="{e(notes)}">⚠ {e(notes)}</div>' if notes
+        else '<div class="card-notes-empty"></div>'
+    )
+
+    platform = cmd.get('platform') or 'Windows'
+    scope = cmd.get('scope') or 'Client / Desktop'
+    p_fg, p_bg = _PLATFORM_COLORS.get(platform, ('#94a3b8', 'rgba(148,163,184,.12)'))
+    s_fg, s_bg = _SCOPE_COLORS.get(scope, ('#94a3b8', 'rgba(148,163,184,.12)'))
+
+    badges = (
+        f'{_badge(platform, p_fg, p_bg)}'
+        f'{_badge(scope, s_fg, s_bg)}'
+        f'<span class="risk-badge {risk_class(cmd.get("risk_level"))}">{e(cmd.get("risk_level"))}</span>'
+    )
+
     return (
         '<div class="cmd-body">'
         '<div class="card-top"><div class="card-head-row">'
@@ -133,7 +248,7 @@ def _card_html(cmd: dict, seq: int) -> str:
         '<div class="card-title-block">'
         f'<div class="card-title">{e(cmd.get("title"))}</div>'
         f'<div class="card-purpose">{e(cmd.get("purpose") or "No purpose specified")}</div></div>'
-        f'<span class="risk-badge {risk_class(cmd.get("risk_level"))}">{e(cmd.get("risk_level"))}</span>'
+        f'<div class="card-badges">{badges}</div>'
         '</div></div>'
         f'<div class="card-code-wrap"><div class="card-code">{multiline(cmd.get("command_text"))}</div></div>'
         f'{notes_html}<div class="card-spacer"></div>'
